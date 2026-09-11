@@ -1,0 +1,8 @@
+[workspace]
+members = ["crates/caliber-core", "crates/caliber-ffi"]
+resolver = "3"
+
+[workspace.package]
+version = "0.0.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"

@@ -1,0 +1,12 @@
+[package]
+name = "caliber-ffi"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Experimental C-compatible boundary for the Caliber application contract"
+
+[lib]
+crate-type = ["rlib", "cdylib", "staticlib"]
+
+[dependencies]
+caliber-core = { path = "../caliber-core", version = "0.0.0" }
