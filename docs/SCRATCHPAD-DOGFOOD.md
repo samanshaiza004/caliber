@@ -88,6 +88,12 @@ preallocated. Those costs are documented in `DESIGN.md`, `OWNERSHIP.md`, and
 the ABI notes, but were not falsely attributed to Scratchpad because this first
 slice does not link the Rust FFI library.
 
+The two standalone crates contain 2,775 raw Rust source lines including their
+unit tests and documentation comments. As a reference point rather than a
+Scratchpad delta, an Apple M1 release build produced a 419 KiB dynamic library
+and a 17 MiB static library. The first dogfood did not link either artifact, so
+incremental Scratchpad RSS and binary size remain unmeasured.
+
 The command/state latency and allocation numbers below are intentionally
 machine-specific smoke evidence, not API targets. On the development Apple M1
 host, three benchmark runs reported approximately 9.5–10.3 ns/op and 0 B/op

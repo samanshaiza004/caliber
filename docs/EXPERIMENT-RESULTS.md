@@ -56,6 +56,13 @@ The local dispatch path adds an interface call and switch but no encoding or
 allocation in the tested lifecycle commands. It adds no goroutine and does not
 change shutdown or ownership behavior.
 
+The extracted `caliber-core` and `caliber-ffi` crates contain 2,775 raw Rust
+source lines including tests and documentation comments. On the development
+Apple M1 host, a release build produced a 419 KiB dynamic library and a 17 MiB
+static library. These are standalone reference artifacts, not incremental
+Scratchpad sizes, because the first dogfood intentionally did not link the FFI
+library.
+
 On the development Apple M1 host, three benchmark runs measured approximately
 9.5–10.3 ns/op and 0 B/op for semantic select dispatch, versus 9.6–13.1 ns/op
 and 0 B/op for direct `Activate`. A one-document snapshot measured 48–56 ns/op,
