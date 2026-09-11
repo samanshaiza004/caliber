@@ -6,8 +6,9 @@ application changed, including where it did not justify using Caliber yet.
 
 ## Application
 
-[Scratchpad](https://github.com/samanshaiza004/scratchpad) is a native Go,
-file-first editor whose current shell uses Shirei. Its `application` package
+[Scratchpad](https://github.com/samanshaiza004/scratchpad/tree/caliber-dogfood)
+is a native Go, file-first editor whose current shell uses Shirei. Its
+`application` package
 already contains the useful ownership boundary: it owns workspace and document
 identity, open-document order, active selection, save/conflict policy, and
 document lifecycle. The `ui` package owns Shirei composition and transient
@@ -32,6 +33,11 @@ The local Scratchpad working tree contains this proof in:
 - `application/presentation.go`;
 - `application/presentation_test.go`;
 - the semantic command routing in `ui/root.go`.
+
+The proof is also available as commit
+[`8bfa8a6`](https://github.com/samanshaiza004/scratchpad/commit/8bfa8a6)
+on the `caliber-dogfood` branch. It is intentionally a branch, not a rewrite
+of Scratchpad's main line.
 
 The existing editor-scale work was not rewritten and no Caliber crate was added
 as a dependency. The contract is intentionally a direct Go adapter today. A
@@ -63,7 +69,7 @@ the extra contract, not unrelated GUI runtime cost.
 
 | Cost or benefit | Direct Shirei integration | First semantic contract slice |
 | --- | --- | --- |
-| Scratchpad glue added | 0 lines | 129-line contract/test plus small routing and revision hooks |
+| Scratchpad glue added | 0 lines | 129-line contract, 124-line test, plus small routing and revision hooks |
 | Command encoding | Go method call | Go struct + interface dispatch; no serialization |
 | State snapshot | Direct field access | One copied summary slice; no document bytes |
 | Buffer copies per repaint | 0 from this seam | 0; editor remains local |

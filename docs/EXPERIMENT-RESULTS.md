@@ -26,7 +26,9 @@ test is the Scratchpad semantic boundary documented in
   workspace buildability. Unix CI also runs the synthetic and Go/cgo proofs.
 - Scratchpad's current Shirei UI uses a small typed semantic contract for
   open/select/save/close while leaving its scalable editor and GUI mechanics
-  intact. Scratchpad's application package remains Shirei-free.
+  intact. The proof is committed on the `caliber-dogfood` branch at
+  [`8bfa8a6`](https://github.com/samanshaiza004/scratchpad/commit/8bfa8a6),
+  and Scratchpad's application package remains Shirei-free.
 
 ## What the dogfood changed
 
@@ -46,9 +48,10 @@ those costs with a second real consumer.
 
 ## Cost record
 
-The Scratchpad patch added 129 lines for the contract and its tests, plus 57
-lines of routing/revision changes. It copies only a bounded document-summary
-slice when a snapshot is requested; it does not copy editor bytes per frame.
+The Scratchpad patch added 129 lines for the contract, 124 lines of tests, and
+58 added lines of routing/revision changes. It copies only a bounded
+document-summary slice when a snapshot is requested; it does not copy editor
+bytes per frame.
 The local dispatch path adds an interface call and switch but no encoding or
 allocation in the tested lifecycle commands. It adds no goroutine and does not
 change shutdown or ownership behavior.
