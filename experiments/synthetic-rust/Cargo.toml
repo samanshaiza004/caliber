@@ -4,7 +4,7 @@ version = "0.0.0"
 edition = "2024"
 publish = false
 license = "MIT OR Apache-2.0"
-description = "Private Rust falsification harness for the Caliber boundary"
+description = "Rust falsification harness for the experimental Caliber boundary"
 
 [workspace]
 

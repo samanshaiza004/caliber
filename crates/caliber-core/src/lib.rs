@@ -1,4 +1,4 @@
-//! Small, private experiments for the Caliber application/presentation boundary.
+//! Small experiments for the Caliber application/presentation boundary.
 //!
 //! This crate deliberately has no GUI, window, renderer, Wasm, async, or FFI
 //! dependencies. It contains mechanisms only; it does not define widgets,

@@ -1,72 +1,137 @@
 # Caliber experiment results
 
-Final verdict: **NO-GO** for a Caliber library or public extraction. This is
-an experimental result, not a release recommendation. The implementation is
-kept as disposable evidence only.
+Current status: **experimental, being independently dogfooded, no stable API
+yet**. Current verdict: **narrow**.
 
-## Evidence completed
+The extraction is now an independent repository with the original Caliber
+implementation history preserved as its root commit. The first real pressure
+test is the Scratchpad semantic boundary documented in
+[`SCRATCHPAD-DOGFOOD.md`](SCRATCHPAD-DOGFOOD.md).
 
-- `caliber-core` provides bounded control, revisioned state, generation-checked
-  immutable resources, latest-value telemetry, SPSC overflow behavior, and a
-  coalescing wake signal.
+## Current evidence
+
+- `caliber-core` provides bounded control, revisioned state,
+  generation-checked immutable resources, latest-value telemetry, SPSC
+  overflow behavior, and a coalescing wake signal.
 - The Rust synthetic backend exercises all three planes with application-owned
-  schemas, a single waveform resource, stale-command policy, malformed-state
+  schemas, a waveform resource, stale-command policy, malformed-state
   preservation, and deterministic trace replay.
-- The provisional versioned C table has explicit pointer/length checks,
-  bounded queues, lease cleanup, generation errors, short-config handling,
-  panic containment, and Rust round-trip tests.
+- The provisional C table has explicit pointer/length checks, bounded queues,
+  lease cleanup, generation errors, short-config handling, panic containment,
+  and Rust round-trip tests.
 - The Go cgo smoke frontend consumes the same table and exercises command
   dispatch/peek/take, state publication/read, immutable resource mapping and
   release, latest telemetry, wake observation, and cleanup.
-- The idle queue test demonstrates that the core does not require a polling
+- Linux, macOS, and Windows CI now cover formatting, clippy, Rust tests, and
+  workspace buildability. Unix CI also runs the synthetic and Go/cgo proofs.
+- Scratchpad's current Shirei UI uses a small typed semantic contract for
+  open/select/save/close while leaving its scalable editor and GUI mechanics
+  intact. Scratchpad's application package remains Shirei-free.
+
+## What the dogfood changed
+
+The real application made the boundary smaller and more concrete. The useful
+contract is document lifecycle and shell state, not editor mechanics. File
+identity, open order, active selection, dirty/conflict status, save policy, and
+close policy are application-authoritative. Text buffers, caret/selection,
+viewport, shaping, folds, projections, and paint remain local to the existing
+Scratchpad/Shirei path.
+
+That is enough to keep the current UI replaceable in principle: a future shell
+can implement against the semantic contract without importing Shirei. It is not
+enough evidence to justify forcing that contract through the current Rust C ABI
+yet. The direct Go adapter has no serialization, no foreign handles, no new
+thread, and no shutdown protocol. A future foreign client would need to earn
+those costs with a second real consumer.
+
+## Cost record
+
+The Scratchpad patch added 129 lines for the contract and its tests, plus 57
+lines of routing/revision changes. It copies only a bounded document-summary
+slice when a snapshot is requested; it does not copy editor bytes per frame.
+The local dispatch path adds an interface call and switch but no encoding or
+allocation in the tested lifecycle commands. It adds no goroutine and does not
+change shutdown or ownership behavior.
+
+On the development Apple M1 host, three benchmark runs measured approximately
+9.5–10.3 ns/op and 0 B/op for semantic select dispatch, versus 9.6–13.1 ns/op
+and 0 B/op for direct `Activate`. A one-document snapshot measured 48–56 ns/op,
+64 B/op, and one allocation. These are local Go contract measurements, not
+Rust/FFI latency targets.
+
+Incremental RSS and binary size were not reported as Caliber numbers because
+the first dogfood slice intentionally does not link `caliber-ffi`. Reporting a
+native-boundary number here would confuse a direct Go adapter with a Rust/FFI
+integration. The standalone core's copy and lease
+behavior is stated in the design/ownership docs and covered by tests; a
+cross-language benchmark remains a required future experiment, not a claimed
+result.
+
+The direct Shirei comparison therefore currently wins on simplicity. Caliber's
+present gain is architectural evidence: an explicit, headless-testable,
+Shirei-free application contract and preserved backend/editor ownership. The
+second frontend and measured cross-language reuse are still absent.
+
+## Historical result from the Instar-only experiment
+
+The following is retained as historical evidence. It was correct for the
+earlier, Instar-contained experiment and is not the current repository status.
+
+### Evidence completed then
+
+- `caliber-core` provided bounded control, revisioned state, generation-checked
+  immutable resources, latest-value telemetry, SPSC overflow behavior, and a
+  coalescing wake signal.
+- The Rust synthetic backend exercised all three planes with application-owned
+  schemas, a single waveform resource, stale-command policy,
+  malformed-publication preservation, and deterministic trace replay.
+- The provisional versioned C table had explicit pointer/length checks,
+  bounded queues, lease cleanup, generation errors, short-config handling,
+  panic containment, and Rust round-trip tests.
+- The Go cgo smoke frontend consumed the same table and exercised command
+  dispatch/peek/take, state publication/read, immutable resource mapping and
+  release, latest telemetry, wake observation, and cleanup.
+- The idle queue test demonstrated that the core did not require a polling
   timer merely to wait for control work.
 
-Commands used for the current evidence:
+### Evidence deliberately missing then
 
-```text
-cargo fmt --manifest-path caliber/Cargo.toml --all -- --check
-cargo test --manifest-path caliber/Cargo.toml
-cargo clippy --manifest-path caliber/Cargo.toml --workspace --all-targets -- -D warnings
-cargo test --manifest-path caliber/experiments/synthetic-rust/Cargo.toml
-cargo run --manifest-path caliber/experiments/synthetic-rust/Cargo.toml
-python3 caliber/experiments/synthetic/trace_harness.py
-cargo build --manifest-path caliber/Cargo.toml -p caliber-ffi
-(cd caliber/experiments/go-ffi && CGO_LDFLAGS="-L../../target/debug" DYLD_LIBRARY_PATH=../../target/debug go run .)
-```
-
-The final command requires cgo and a native library build; the exact macOS
-invocation is documented beside the smoke frontend.
-
-## Evidence deliberately missing
-
-- There is no second real GUI frontend. No Fenestra or Shirei checkout is
-  available in this workspace, so no substitute GUI framework was invented.
-- There is no Punks facade yet. The sibling Punks checkout is independently
-  dirty and was not modified; integrating it before the synthetic proof would
-  couple the experiment to a large presentation/runtime dependency.
-- No benchmark numbers are advertised. A direct-integration kill test still
-  needs measured boilerplate, latency, allocations, RSS, and debugging/
+- There was no second real GUI frontend. No Fenestra or Shirei checkout was
+  available in the original experiment, so no substitute GUI framework was
+  invented.
+- There was no Punks facade. The sibling Punks checkout was independently dirty
+  and was not modified; integrating it before the synthetic proof would have
+  coupled the experiment to a large presentation/runtime dependency.
+- No benchmark numbers were advertised. The direct-integration kill test still
+  needed measured boilerplate, latency, allocations, RSS, and debugging/
   shutdown cost for a real application.
-- The C table is not stable and has no generated public header or bindings.
-  It is a seam to falsify, not a package to publish.
+- The C table was not stable and had no generated public header or bindings.
+  It was a seam to falsify, not a package to publish.
 
-## Evaluation
+### Historical evaluation
 
-The language split is technically possible: the Go smoke caller consumed the
-same C table as the Rust tests. That is not evidence of a useful UI split,
-because it has no GUI and there is no second real frontend. GUI-framework
+The language split was technically possible: the Go smoke caller consumed the
+same C table as the Rust tests. That was not evidence of a useful UI split,
+because it had no GUI and there was no second real frontend. GUI-framework
 neutrality, waveform repaint behavior, and application-level debugging cost
-therefore remain unproven.
+therefore remained unproven.
 
-For the only real consumer, the direct Rust synthetic application is plainly
-smaller than carrying a 2,600-line core/ABI boundary plus lease and pointer
-contracts. The boundary buys no demonstrated reuse until a second independent
-frontend exists. The required Punks facade, Fenestra frontend, second
-foreign GUI, latency/RSS/binary measurements, and foreign stream/wake adapter
-were intentionally not invented to rescue that result.
+For the only real consumer at that time, the direct Rust synthetic application
+was plainly smaller than carrying a 2,600-line core/ABI boundary plus lease
+and pointer contracts. The boundary bought no demonstrated reuse until a
+second independent frontend existed. The required Punks facade, Fenestra
+frontend, second foreign GUI, latency/RSS/binary measurements, and foreign
+stream/wake adapter were intentionally not invented to rescue that result.
 
-**NO-GO.** Do not publish or split these mechanisms into repositories. Keep
-the bounded ownership and revision tests as design evidence; use direct
-application integration until a concrete independent consumer makes the
-trade-off measurable. Do not add widgets, layout, rendering, universal
-serialization, IPC, or an async runtime to reverse this decision.
+Historical verdict: **NO-GO** for publishing or splitting the mechanisms at
+that point. The finding remains valid as historical evidence, but extraction
+and Scratchpad dogfood now test the narrower application-lifecycle hypothesis.
+
+## Current decision
+
+**NARROW.** Keep the repository independent and the mechanisms small. Continue
+dogfooding only the framework-neutral lifecycle/state boundary. Do not publish,
+promise ABI stability, add widgets or universal serialization, or route
+high-frequency editor mechanics through Caliber until a second materially
+different frontend demonstrates that the flexibility outweighs the direct
+integration cost.

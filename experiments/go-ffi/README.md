@@ -21,7 +21,7 @@ generation, lease, bound, and wake behavior.
 From this directory on macOS or Linux:
 
     cargo build --manifest-path ../../Cargo.toml -p caliber-ffi
-    CGO_LDFLAGS="-L../../target/debug" DYLD_LIBRARY_PATH=../../target/debug go run .
+    CGO_LDFLAGS="-L../../target/debug" LD_LIBRARY_PATH=../../target/debug DYLD_LIBRARY_PATH=../../target/debug go run .
 
 Expected output:
 
@@ -32,6 +32,6 @@ The exact wake sequence can differ if the ABI gains another accepted event;
 the test checks monotonic change and preservation on rejected input rather
 than depending on a fixed event count.
 
-The command requires cgo and a native Rust library. Windows needs the
-corresponding Cargo target output and DLL search path configuration; this
-experiment does not add a platform-specific GUI or build system.
+The command requires cgo and a native Rust library. Windows is intentionally
+not included in this smoke command because DLL search-path setup is different;
+the standalone workspace still builds and tests there in CI.
