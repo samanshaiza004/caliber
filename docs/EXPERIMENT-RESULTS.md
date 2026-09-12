@@ -189,8 +189,8 @@ deferred until the result settles the document/editor ownership question.
 
 **continue**
 
-Continue only the narrow, framework-neutral experiment through Gate 3. Do not
-publish, promise ABI stability, add widgets or universal serialization, or
-route high-frequency editor mechanics through Caliber until bounded
-cross-language data proves that the flexibility outweighs direct Shirei
-integration.
+Continue only the narrow, framework-neutral experiment informed by Gate 3.
+Do not publish, promise ABI stability, add widgets or universal serialization,
+or route high-frequency editor mechanics through Caliber. Gate 4 remains
+deferred until the bounded data seam and its costs justify an editor-specific
+experiment.
