@@ -154,28 +154,36 @@ commands. Numeric request IDs correlate outcomes, application revisions are
 kept separate from Caliber transport revisions, and invalid UTF-8 paths are
 rejected explicitly.
 
-The acceptance suite passes the root Scratchpad tests without Caliber, nested
-backend tests with `GOEXPERIMENT=cgocheck2`, and Rust format/tests/clippy/build.
-Lifecycle tests cover double start/stop, call after stop, lease-protected
-shutdown, malformed/oversized packets, and bounded listings. A macOS loader
-inspection of the built backend shows exactly one Caliber dynamic dependency;
-the Rust executable has no Caliber dependency. The local managed environment
-cannot run the AppKit executable to completion, so native launch smoke remains
-a CI/desktop-worker check rather than a claimed local pass.
+The Gate 1–3 acceptance suite passes the root Scratchpad tests without
+Caliber, nested backend tests with `GOEXPERIMENT=cgocheck2`, and Rust
+format/tests/clippy/build. Lifecycle tests cover double start/stop, call after
+stop, state/resource-lease-protected shutdown, malformed/oversized packets,
+and bounded listings. A 2,000-line fixture exercises the real bounded
+`read_visible_lines` path: at most 256 lines and 64 KiB are assembled from the
+existing piece-backed buffer, published as one immutable `SPVS` resource, and
+mapped, copied, validated, and released by Rust. The full document is never
+serialized through this seam.
 
-The measured debug artifact set is three files: approximately 92 MiB Rust
-executable, 24 MiB Go c-shared backend, and 0.8 MiB Caliber cdylib. These are
-engineering-cost signals, not release sizes. Cold start and settled idle RSS
-still need a native sampler. The concrete new costs are the Go runtime
-baseline, JSON encode/decode and bounded state copies, three-artifact
-packaging, dynamic-loader setup, and explicit lease/lifetime diagnostics. The
-concrete gain is that the Scratchpad application/editor code remains unaware of
-both Shirei and GPUI, and a second frontend can use the same semantic contract.
+A macOS loader inspection of the built backend shows exactly one Caliber
+dynamic dependency; the Rust executable has no Caliber dependency. The local
+managed environment cannot run the AppKit executable to completion, so native
+launch smoke remains a CI/desktop-worker check rather than a claimed local
+pass.
 
-Gate 3 is therefore still deferred: if work continues, it should test only
-bounded immutable visible-line resources, never whole-document snapshots. Gate
-4 remains deferred until that result settles the document/editor ownership
-question.
+The measured debug artifact set is three files: 97,753,312-byte Rust
+executable, 24,756,832-byte Go c-shared backend, and 823,272-byte Caliber
+cdylib. The foreign test measured approximately 21.9 µs per command → state
+read and 10.9 ms per command → bounded visible resource → Rust cache round
+trip, using 16 samples. Settled RSS was not sampled. These are engineering
+cost signals, not release sizes. The concrete new costs are the Go runtime
+baseline, JSON encode/decode and bounded state copies, resource copies, three-
+artifact packaging, dynamic-loader setup, and explicit lease/lifetime
+diagnostics. The concrete gain is that the Scratchpad application/editor code
+remains unaware of both Shirei and GPUI, and a second frontend can use the same
+semantic contract.
+
+Gate 3 is now complete as a bounded data-seam experiment. Gate 4 remains
+deferred until the result settles the document/editor ownership question.
 
 ## Current verdict
 

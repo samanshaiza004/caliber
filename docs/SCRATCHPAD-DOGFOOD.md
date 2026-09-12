@@ -1,8 +1,9 @@
 # Scratchpad dogfood
 
-Status: first boundary slice complete; Caliber remains experimental and is
-being independently dogfooded. This document records what the first real
-application changed, including where it did not justify using Caliber yet.
+Status: Gates 1–3 complete on the experimental `gpui-dogfood` branch; Caliber
+remains experimental, is being independently dogfooded, and has no stable API
+yet. This document records what the first real application changed and what
+the bounded data experiment actually measured.
 
 ## Application
 
@@ -40,9 +41,15 @@ on the `caliber-dogfood` branch. It is intentionally a branch, not a rewrite
 of Scratchpad's main line.
 
 The existing editor-scale work was not rewritten and no Caliber crate was added
-as a dependency. The contract is intentionally a direct Go adapter today. A
-future Caliber-backed client can implement the same semantic interface after a
-real cross-language cost is justified.
+as a dependency to Scratchpad's root module. The `gpui-dogfood` branch adds a
+nested cgo backend and Rust/GPUI shell that implement the same semantic
+interface through the real Caliber foreign boundary.
+
+Gate 3 adds only a bounded visible-line request. The Go adapter reads directly
+from the existing piece-backed buffer, publishes a 48-byte-header `SPVS`
+immutable resource with at most 256 lines and 64 KiB of payload, and Rust maps,
+validates, copies, and releases it. The complete document never crosses this
+interface. Gate 4 remains deferred.
 
 ## What stays frontend-local
 
@@ -78,7 +85,7 @@ the extra contract, not unrelated GUI runtime cost.
 | RSS/binary delta | Baseline | Not isolated reliably on macOS for this small in-process slice; no native Caliber library was linked |
 | Debugging | One concrete application object | One semantic adapter plus a revision field; errors remain application errors |
 | Shutdown/lifetime | Existing Scratchpad lifecycle | Unchanged; no foreign handles, callback, or new goroutine introduced |
-| Flexibility gained | Shirei is the only shell path | A typed shell contract and a testable headless consumer shape; a second frontend is still unbuilt |
+| Flexibility gained | Shirei is the only shell path | A typed shell contract now consumed by both Shirei and the experimental Rust/GPUI shell |
 
 The standalone Caliber mechanisms have a different cost profile: control
 dispatch copies bounded bytes, state publication copies a bounded immutable
@@ -122,8 +129,9 @@ editor. It also exposes the main limitation: a direct Go adapter is currently
 cheaper than crossing the provisional C ABI, and no second real frontend has
 yet demonstrated reuse.
 
-This is evidence to **narrow**, not to generalize. Keep Caliber's three-plane
+This is evidence to **continue**, not to generalize. Keep Caliber's three-plane
 mechanisms and ownership tests independent; do not add editor serialization,
-widget abstractions, IPC, or an async runtime. The next experiment should only
-introduce a foreign Caliber client if a concrete second frontend makes the
-additional copies, latency, lifetime rules, and debugging cost measurable.
+widget abstractions, IPC, or an async runtime. Gate 3 makes the additional
+copies, latency, lifetime rules, and debugging cost measurable. The direct
+Shirei path remains simpler, so Gate 4 should proceed only after reviewing
+whether this bounded data seam earns its complexity.
