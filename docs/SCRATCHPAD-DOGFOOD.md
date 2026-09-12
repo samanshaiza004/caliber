@@ -120,14 +120,24 @@ local Go contract and are not evidence about Rust/FFI latency. The important
 editor-path facts are zero editor copies, no new goroutine, and one
 summary-slice allocation per published snapshot.
 
+The Gate 3 foreign test adds a separate measurement on the development Apple
+M1 host: approximately 21.9 µs per command → state read and 10.9 ms per
+command → bounded visible resource → Rust cache round trip, using 16 samples.
+The debug runtime consists of a 97,753,312-byte Rust executable, a
+24,756,832-byte Go c-shared backend, and an 823,272-byte Caliber library.
+Settled RSS was not sampled, and the managed macOS environment could not
+complete the native window smoke within its 30-second bound. The direct Shirei
+path remains simpler and has fewer copies, artifacts, and lifetime rules.
+
 ## Result
 
 The slice answers the critical compatibility question positively: the current
-Shirei UI can use a small application-owned semantic contract without making
-Scratchpad's domain package know about Shirei or disturbing the scalable
-editor. It also exposes the main limitation: a direct Go adapter is currently
-cheaper than crossing the provisional C ABI, and no second real frontend has
-yet demonstrated reuse.
+Shirei UI and the experimental GPUI shell can use a small application-owned
+semantic contract without making Scratchpad's domain package know about either
+GUI framework or disturbing the scalable editor. It also exposes the main
+limitation: a direct Go adapter is currently cheaper than crossing the
+provisional C ABI, and the Gate 3 resource seam adds measurable copies,
+artifacts, and lifetime rules.
 
 This is evidence to **continue**, not to generalize. Keep Caliber's three-plane
 mechanisms and ownership tests independent; do not add editor serialization,
