@@ -1,6 +1,6 @@
 # Scratchpad dogfood
 
-Status: Gates 1–3 complete on the experimental `gpui-dogfood` branch; Caliber
+Status: Gates 1–3.5 complete on the experimental `gpui-dogfood` branch; Caliber
 remains experimental, is being independently dogfooded, and has no stable API
 yet. This document records what the first real application changed and what
 the bounded data experiment actually measured.
@@ -50,6 +50,15 @@ from the existing piece-backed buffer, publishes a 48-byte-header `SPVS`
 immutable resource with at most 256 lines and 64 KiB of payload, and Rust maps,
 validates, copies, and releases it. The complete document never crosses this
 interface. Gate 4 remains deferred.
+
+Gate 3.5 replaces the initial per-line extraction loop with one bounded
+contiguous piece-range copy. The foreign path now reports warm median/p95
+timings over 64 samples: 90.5/122.3 µs for the 9.6 KiB fixture, with the
+backend pump containing Go decode/extraction/resource publication and response
+JSON. The direct extraction benchmark is 37.7 µs, 9,472 bytes, and one
+allocation. A visible slice is accepted by the GPUI model only when its
+document id, application revision, and editor revision match current state;
+100 rapid pending ranges collapse to the latest request.
 
 ## What stays frontend-local
 
@@ -120,14 +129,18 @@ local Go contract and are not evidence about Rust/FFI latency. The important
 editor-path facts are zero editor copies, no new goroutine, and one
 summary-slice allocation per published snapshot.
 
-The Gate 3 foreign test adds a separate measurement on the development Apple
-M1 host: approximately 21.9 µs per command → state read and 10.9 ms per
-command → bounded visible resource → Rust cache round trip, using 16 samples.
-The debug runtime consists of a 97,753,312-byte Rust executable, a
-24,756,832-byte Go c-shared backend, and an 823,272-byte Caliber library.
-Settled RSS was not sampled, and the managed macOS environment could not
-complete the native window smoke within its 30-second bound. The direct Shirei
-path remains simpler and has fewer copies, artifacts, and lifetime rules.
+The Gate 3.5 foreign test adds a separate measurement on the development Apple
+M1 host: approximately 25.8/27.9 µs median/p95 per command → state read and
+84.8/118.1 µs median/p95 per command → bounded visible resource → Rust cache
+round trip, using 64 warm samples with the release-built Go backend and
+Caliber library. The optimized runtime consists of an 18,607,488-byte Rust
+executable, a 24,223,696-byte Go c-shared backend, and a 428,600-byte Caliber
+library: three runtime artifacts. The Rust foreign test is run through Cargo's
+normal test target, so these timings are engineering measurements rather than
+an all-release performance claim. Settled RSS was not sampled, and the
+managed macOS environment could not complete the native window smoke within
+its 30-second bound. The direct Shirei path remains simpler and has fewer
+copies, artifacts, and lifetime rules.
 
 ## Result
 

@@ -154,7 +154,7 @@ commands. Numeric request IDs correlate outcomes, application revisions are
 kept separate from Caliber transport revisions, and invalid UTF-8 paths are
 rejected explicitly.
 
-The Gate 1–3 acceptance suite passes the root Scratchpad tests without
+The Gate 1–3.5 acceptance suite passes the root Scratchpad tests without
 Caliber, nested backend tests with `GOEXPERIMENT=cgocheck2`, and Rust
 format/tests/clippy/build. Lifecycle tests cover double start/stop, call after
 stop, state/resource-lease-protected shutdown, malformed/oversized packets,
@@ -170,33 +170,41 @@ managed environment cannot run the AppKit executable to completion, so native
 launch smoke remains a CI/desktop-worker check rather than a claimed local
 pass.
 
-The measured debug artifact set is three files: 97,753,312-byte Rust
-executable, 24,756,832-byte Go c-shared backend, and 823,272-byte Caliber
-cdylib. The foreign test measured approximately 21.9 µs per command → state
-read and 10.9 ms per command → bounded visible resource → Rust cache round
-trip, using 16 samples. Settled RSS was not sampled. These are engineering
-cost signals, not release sizes. The concrete new costs are the Go runtime
-baseline, JSON encode/decode and bounded state copies, resource copies, three-
-artifact packaging, dynamic-loader setup, and explicit lease/lifetime
-diagnostics. The concrete gain is that the Scratchpad application/editor code
+The optimized artifact set is three files: 18,607,488-byte Rust executable,
+24,223,696-byte Go c-shared backend, and 428,600-byte Caliber cdylib. After
+replacing per-line `Buffer.Line` extraction with one bounded piece-range copy,
+the foreign test measured 84.8 µs median and 118.1 µs p95 for command → bounded
+visible resource → Rust cache, using 64 warm samples.
+The direct Go extraction benchmark measured 37.7 µs, 9,472 bytes, and one
+allocation. The foreign stages were approximately 10.6 µs Rust encode/dispatch,
+71.4 µs backend pump/response decode, 1.0 µs Caliber map/copy/release, and
+1.3 µs `SPVS` decode/cache at the median. The backend
+pump includes Go command decode, range extraction, resource publication, and
+response JSON. Settled RSS was not sampled. The timings are engineering-cost
+signals rather than performance targets; the artifact bytes are the local
+optimized build record. The concrete new costs are the Go runtime baseline,
+JSON encode/decode and bounded state copies, resource copies, three-artifact
+packaging, dynamic-loader setup, and explicit lease/lifetime diagnostics. The
+concrete gain is that the Scratchpad application/editor code
 remains unaware of both Shirei and GPUI, and a second frontend can use the same
 semantic contract.
 
 From the initial Gate 1 commit, the GPUI dogfood adds 1,112 code/test lines
 and deletes 71, excluding documentation and workflow text. The bounded data
-path allocates a line-by-line Go assembly buffer, one Caliber resource payload,
-one Rust resource copy, and the cached bounded byte vector; it also performs
-the existing JSON command/state allocations. No allocation scales with the
-complete document, and the temporary lossy display string is frontend-local.
+path resolves two indexed piece-buffer boundaries and copies one contiguous
+Go range, then allocates one Caliber resource payload, one Rust resource copy,
+and the cached bounded byte vector; it also performs the existing JSON
+command/state allocations. No allocation scales with the complete document,
+and the temporary lossy display string is frontend-local.
 
-Gate 3 is now complete as a bounded data-seam experiment. Gate 4 remains
+Gate 3.5 is now complete as a bounded data-seam closeout. Gate 4 remains
 deferred until the result settles the document/editor ownership question.
 
 ## Current verdict
 
 **continue**
 
-Continue only the narrow, framework-neutral experiment informed by Gate 3.
+Continue only the narrow, framework-neutral experiment informed by Gate 3.5.
 Do not publish, promise ABI stability, add widgets or universal serialization,
 or route high-frequency editor mechanics through Caliber. Gate 4 remains
 deferred until the bounded data seam and its costs justify an editor-specific
