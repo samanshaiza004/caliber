@@ -182,6 +182,13 @@ diagnostics. The concrete gain is that the Scratchpad application/editor code
 remains unaware of both Shirei and GPUI, and a second frontend can use the same
 semantic contract.
 
+From the initial Gate 1 commit, the GPUI dogfood adds 1,112 code/test lines
+and deletes 71, excluding documentation and workflow text. The bounded data
+path allocates a line-by-line Go assembly buffer, one Caliber resource payload,
+one Rust resource copy, and the cached bounded byte vector; it also performs
+the existing JSON command/state allocations. No allocation scales with the
+complete document, and the temporary lossy display string is frontend-local.
+
 Gate 3 is now complete as a bounded data-seam experiment. Gate 4 remains
 deferred until the result settles the document/editor ownership question.
 
