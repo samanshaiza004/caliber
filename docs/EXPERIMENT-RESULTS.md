@@ -1,7 +1,7 @@
 # Caliber experiment results
 
 Current status: **experimental, being independently dogfooded, no stable API
-yet**. Current verdict: **narrow**.
+yet**. The current verdict is recorded at the end of this document.
 
 The extraction is now an independent repository with the original Caliber
 implementation history preserved as its root commit. The first real pressure
@@ -137,11 +137,52 @@ Historical verdict: **NO-GO** for publishing or splitting the mechanisms at
 that point. The finding remains valid as historical evidence, but extraction
 and Scratchpad dogfood now test the narrower application-lifecycle hypothesis.
 
-## Current decision
+## GPUI second-frontend dogfood
 
-**NARROW.** Keep the repository independent and the mechanisms small. Continue
-dogfooding only the framework-neutral lifecycle/state boundary. Do not publish,
-promise ABI stability, add widgets or universal serialization, or route
-high-frequency editor mechanics through Caliber until a second materially
-different frontend demonstrates that the flexibility outweighs the direct
-integration cost.
+Scratchpad's `gpui-dogfood` branch now supplies the first materially different
+frontend attempt: Rust/GPUI shell → one Go c-shared backend → one linked
+Caliber `cdylib` → the unchanged Shirei-free Go application contract. The Rust
+package depends on `gpui-kit = "=0.6.1"` only; it does not depend on
+`caliber-ffi`.
+
+The Gate 1 interface remains intentionally small: bounded shell state and one
+requested directory listing, plus open/select/save/close commands. Rust calls
+the Caliber API table returned by the Go backend directly for dispatch, state
+read/release, and wake observation. A single GPUI background scheduler owns the
+session and serializes filesystem work; the foreground only submits semantic
+commands. Numeric request IDs correlate outcomes, application revisions are
+kept separate from Caliber transport revisions, and invalid UTF-8 paths are
+rejected explicitly.
+
+The acceptance suite passes the root Scratchpad tests without Caliber, nested
+backend tests with `GOEXPERIMENT=cgocheck2`, and Rust format/tests/clippy/build.
+Lifecycle tests cover double start/stop, call after stop, lease-protected
+shutdown, malformed/oversized packets, and bounded listings. A macOS loader
+inspection of the built backend shows exactly one Caliber dynamic dependency;
+the Rust executable has no Caliber dependency. The local managed environment
+cannot run the AppKit executable to completion, so native launch smoke remains
+a CI/desktop-worker check rather than a claimed local pass.
+
+The measured debug artifact set is three files: approximately 92 MiB Rust
+executable, 24 MiB Go c-shared backend, and 0.8 MiB Caliber cdylib. These are
+engineering-cost signals, not release sizes. Cold start and settled idle RSS
+still need a native sampler. The concrete new costs are the Go runtime
+baseline, JSON encode/decode and bounded state copies, three-artifact
+packaging, dynamic-loader setup, and explicit lease/lifetime diagnostics. The
+concrete gain is that the Scratchpad application/editor code remains unaware of
+both Shirei and GPUI, and a second frontend can use the same semantic contract.
+
+Gate 3 is therefore still deferred: if work continues, it should test only
+bounded immutable visible-line resources, never whole-document snapshots. Gate
+4 remains deferred until that result settles the document/editor ownership
+question.
+
+## Current verdict
+
+**continue**
+
+Continue only the narrow, framework-neutral experiment through Gate 3. Do not
+publish, promise ABI stability, add widgets or universal serialization, or
+route high-frequency editor mechanics through Caliber until bounded
+cross-language data proves that the flexibility outweighs direct Shirei
+integration.
