@@ -29,22 +29,27 @@ test is the Scratchpad semantic boundary documented in
   intact. The proof is committed on the `caliber-dogfood` branch at
   [`8bfa8a6`](https://github.com/samanshaiza004/scratchpad/commit/8bfa8a6),
   and Scratchpad's application package remains Shirei-free.
+- Scratchpad's `gpui-dogfood` branch now consumes the same contract through the
+  real Go → Caliber → Rust path and adds a bounded optimistic source-edit
+  spike. The closeout is committed at
+  [`77dbc57`](https://github.com/samanshaiza004/scratchpad/commit/77dbc57).
 
 ## What the dogfood changed
 
 The real application made the boundary smaller and more concrete. The useful
-contract is document lifecycle and shell state, not editor mechanics. File
-identity, open order, active selection, dirty/conflict status, save policy, and
-close policy are application-authoritative. Text buffers, caret/selection,
-viewport, shaping, folds, projections, and paint remain local to the existing
-Scratchpad/Shirei path.
+contract is document lifecycle, shell state, and eventually bounded source
+edits—not a remote editor object. File identity, open order, active selection,
+dirty/conflict status, save policy, close policy, document bytes, and edit
+revisions are application-authoritative. Caret/selection, viewport, shaping,
+folds, projections, and paint remain local to each frontend; the existing
+Scratchpad/Shirei path keeps its full editor session, while the GPUI spike keeps
+only one bounded optimistic window.
 
-That is enough to keep the current UI replaceable in principle: a future shell
-can implement against the semantic contract without importing Shirei. It is not
-enough evidence to justify forcing that contract through the current Rust C ABI
-yet. The direct Go adapter has no serialization, no foreign handles, no new
-thread, and no shutdown protocol. A future foreign client would need to earn
-those costs with a second real consumer.
+That is enough to keep the current UI replaceable in principle: both the Shirei
+shell and the experimental GPUI shell implement against the semantic contract
+without importing each other's framework. The direct Go adapter remains
+cheaper, but the second frontend now earns a measured foreign data seam and a
+small revisioned source-edit path rather than leaving the C ABI untested.
 
 ## Cost record
 
@@ -154,7 +159,7 @@ commands. Numeric request IDs correlate outcomes, application revisions are
 kept separate from Caliber transport revisions, and invalid UTF-8 paths are
 rejected explicitly.
 
-The Gate 1–3.5 acceptance suite passes the root Scratchpad tests without
+The Gate 1–4 acceptance suite passes the root Scratchpad tests without
 Caliber, nested backend tests with `GOEXPERIMENT=cgocheck2`, and Rust
 format/tests/clippy/build. Lifecycle tests cover double start/stop, call after
 stop, state/resource-lease-protected shutdown, malformed/oversized packets,
@@ -180,8 +185,11 @@ allocation. The foreign stages were approximately 10.6 µs Rust encode/dispatch,
 71.4 µs backend pump/response decode, 1.0 µs Caliber map/copy/release, and
 1.3 µs `SPVS` decode/cache at the median. The backend
 pump includes Go command decode, range extraction, resource publication, and
-response JSON. Settled RSS was not sampled. The timings are engineering-cost
-signals rather than performance targets; the artifact bytes are the local
+response JSON. A separate optimized foreign smoke measured 29.5 µs for one
+Gate 4 edit dispatch → Go acknowledgement → state read → Rust reconciliation
+sample; it is a smoke signal, not a warm distribution. Settled RSS was not
+sampled. The timings are engineering-cost signals rather than performance
+targets; the artifact bytes are the local
 optimized build record. The concrete new costs are the Go runtime baseline,
 JSON encode/decode and bounded state copies, resource copies, three-artifact
 packaging, dynamic-loader setup, and explicit lease/lifetime diagnostics. The
@@ -189,23 +197,33 @@ concrete gain is that the Scratchpad application/editor code
 remains unaware of both Shirei and GPUI, and a second frontend can use the same
 semantic contract.
 
-From the initial Gate 1 commit, the GPUI dogfood adds 1,112 code/test lines
-and deletes 71, excluding documentation and workflow text. The bounded data
+From the initial Gate 1 commit, the GPUI dogfood adds about 2,102 code/test
+lines and deletes 94, excluding documentation and workflow text; Gate 4
+contributes 791 added and 27 deleted lines. The bounded data
 path resolves two indexed piece-buffer boundaries and copies one contiguous
 Go range, then allocates one Caliber resource payload, one Rust resource copy,
 and the cached bounded byte vector; it also performs the existing JSON
 command/state allocations. No allocation scales with the complete document,
 and the temporary lossy display string is frontend-local.
 
-Gate 3.5 is now complete as a bounded data-seam closeout. Gate 4 remains
-deferred until the result settles the document/editor ownership question.
+Gate 3.5 closed the bounded data seam. Gate 4 now adds one bounded optimistic
+source-edit path: Rust owns a local valid-UTF-8 window, caret, and selection;
+Go owns the complete byte buffer, editor revision, edit validation, dirty state,
+and persistence. The Go application rejects stale editor revisions before
+mutation and returns an acknowledgement carrying the new editor revision and
+edited byte range. The real foreign smoke applies the edit, acknowledges it,
+rejects a second stale edit, saves the file, verifies the bytes on disk, and
+shuts down cleanly. The wire remains bounded and byte-oriented; no whole
+document, cursor movement, IME preedit, shaping, layout, or paint data crosses
+Caliber. The initial Rust session rejects truncated or non-UTF-8 windows as a
+temporary source-mapping constraint.
 
 ## Current verdict
 
 **continue**
 
-Continue only the narrow, framework-neutral experiment informed by Gate 3.5.
+Continue only the narrow, framework-neutral experiment informed by Gate 4.
 Do not publish, promise ABI stability, add widgets or universal serialization,
-or route high-frequency editor mechanics through Caliber. Gate 4 remains
-deferred until the bounded data seam and its costs justify an editor-specific
-experiment.
+or route high-frequency editor mechanics through Caliber. A complete editor
+and IME/source-position design remain deferred until this small synchronization
+seam's costs justify them.

@@ -1,6 +1,6 @@
 # Scratchpad dogfood
 
-Status: Gates 1–3.5 complete on the experimental `gpui-dogfood` branch; Caliber
+Status: Gates 1–4 edit-spike complete on the experimental `gpui-dogfood` branch; Caliber
 remains experimental, is being independently dogfooded, and has no stable API
 yet. This document records what the first real application changed and what
 the bounded data experiment actually measured.
@@ -49,25 +49,58 @@ Gate 3 adds only a bounded visible-line request. The Go adapter reads directly
 from the existing piece-backed buffer, publishes a 48-byte-header `SPVS`
 immutable resource with at most 256 lines and 64 KiB of payload, and Rust maps,
 validates, copies, and releases it. The complete document never crosses this
-interface. Gate 4 remains deferred.
+interface. Gate 4 adds only the bounded editable spike below; it does not port
+or rewrite Scratchpad's editor.
 
 Gate 3.5 replaces the initial per-line extraction loop with one bounded
 contiguous piece-range copy. The foreign path now reports warm median/p95
-timings over 64 samples: 90.5/122.3 µs for the 9.6 KiB fixture, with the
+timings over 64 samples: 84.8/118.1 µs for the 9.6 KiB fixture, with the
 backend pump containing Go decode/extraction/resource publication and response
 JSON. The direct extraction benchmark is 37.7 µs, 9,472 bytes, and one
 allocation. A visible slice is accepted by the GPUI model only when its
 document id, application revision, and editor revision match current state;
 100 rapid pending ranges collapse to the latest request.
 
+## Gate 4 edit spike
+
+The first editable path tests the Model B hypothesis without moving the
+scalable editor into Rust. The application remains authoritative for complete
+document bytes, editor revisions, undo/domain edit semantics, dirty state, and
+persistence. The Rust side owns only one bounded visible window plus local
+caret and selection state. It sends a `replace_document` intent with the
+document id, application revision, expected editor revision, global byte range,
+and bounded replacement bytes.
+
+The visible resource descriptor carries the window's global `start_byte`, so a
+local Rust selection can map back to the authoritative Go document without
+serializing the complete document or guessing through replacement characters.
+The first Rust session accepts only a non-truncated valid-UTF-8 window. This is
+a temporary mapping constraint in the spike; the Go wire and Scratchpad editor
+remain byte-oriented and continue to preserve arbitrary source bytes.
+
+Rust applies an edit optimistically to its bounded local copy. Go accepts it
+only when the editor revision still matches, applies the existing document
+replacement operation, publishes the new state, and returns a structured
+acknowledgement. A stale edit is rejected without mutation, and the local
+session can roll back its optimistic copy. The real foreign smoke verifies
+optimistic bytes, acknowledgement, stale rejection, save, on-disk bytes, and
+clean shutdown through the actual Caliber ABI.
+
+High-frequency cursor motion, selection updates, viewport movement, IME
+preedit, shaping, layout, folds, projections, and paint remain frontend-local
+or deferred. The spike permits only one in-flight edit; batching and typing
+coalescence are deferred until a real interactive editor is justified. Gate 4
+is a seam test, not a complete GPUI editor.
+
 ## What stays frontend-local
 
 The boundary does not carry keystrokes, cursor movement, selections, text
 buffers, viewport scroll, shaping, row maps, folds, projections, or paint
-commands. Those are high-frequency editor/presentation mechanics and remain in
-Scratchpad's existing editor and Shirei path. Serializing them would erase the
-scale work that Scratchpad already completed and would turn Caliber into a
-request-per-property protocol.
+commands. Those are high-frequency editor/presentation mechanics and remain
+local to each frontend: the existing Shirei path keeps its full editor, while
+the GPUI spike keeps only one bounded optimistic session. Serializing them
+would erase the scale work that Scratchpad already completed and would turn
+Caliber into a request-per-property protocol.
 
 The application remains authoritative for file identity, document order,
 active selection, dirty/conflict status, save policy, and lifecycle. The
@@ -139,22 +172,24 @@ library: three runtime artifacts. The Rust foreign test is run through Cargo's
 normal test target, so these timings are engineering measurements rather than
 an all-release performance claim. Settled RSS was not sampled, and the
 managed macOS environment could not complete the native window smoke within
-its 30-second bound. The direct Shirei path remains simpler and has fewer
-copies, artifacts, and lifetime rules.
+its 30-second bound. Gate 4 adds no whole-document copy: its optimistic
+rollback copy is limited to the same bounded Rust window, and Go uses the
+existing piece-backed document replacement operation. The direct Shirei path
+remains simpler and has fewer copies, artifacts, and lifetime rules.
 
 ## Result
 
 The slice answers the critical compatibility question positively: the current
 Shirei UI and the experimental GPUI shell can use a small application-owned
 semantic contract without making Scratchpad's domain package know about either
-GUI framework or disturbing the scalable editor. It also exposes the main
-limitation: a direct Go adapter is currently cheaper than crossing the
-provisional C ABI, and the Gate 3 resource seam adds measurable copies,
-artifacts, and lifetime rules.
+GUI framework or disturbing the scalable editor. Gate 4 adds evidence for a
+source-edit seam, but not for a complete editor split: it currently excludes
+IME, viewport/layout ownership, and arbitrary-byte source-position mapping in
+Rust. The direct Go adapter remains cheaper than crossing the provisional C ABI,
+and the foreign path adds measurable copies, artifacts, and lifetime rules.
 
 This is evidence to **continue**, not to generalize. Keep Caliber's three-plane
 mechanisms and ownership tests independent; do not add editor serialization,
-widget abstractions, IPC, or an async runtime. Gate 3 makes the additional
-copies, latency, lifetime rules, and debugging cost measurable. The direct
-Shirei path remains simpler, so Gate 4 should proceed only after reviewing
-whether this bounded data seam earns its complexity.
+widget abstractions, IPC, or an async runtime. Any larger editor experiment
+should proceed only after reviewing whether this bounded source-edit seam earns
+its complexity.
