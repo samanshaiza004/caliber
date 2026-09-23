@@ -139,6 +139,42 @@ a promise that a particular payload remains available forever.
 The adapter must not require a timer just to observe changes. An idle test
 should show no recurring Caliber polling work.
 
+The current experimental function table appends these operations after the
+existing `context_wake_sequence` entry, preserving the prior table prefix:
+
+```c
+CaliberStatus context_wait_wake(
+    const CaliberContext *ctx,
+    uint64_t observed_sequence,
+    uint64_t *out_sequence);
+CaliberStatus context_stop_wake_waiters(const CaliberContext *ctx);
+```
+
+`context_wait_wake` blocks until the sequence differs from the supplied
+observation or the context's wake waiters have been stopped. It uses a
+sequence predicate, so a publication before the call returns immediately and
+spurious condition-variable wakeups do not escape as successful results.
+Successful changes increment the sequence and notify the blocking signal;
+accepted commands, state/resource publication or release, and telemetry
+publication use this path. Multiple changes may coalesce: the sequence is a
+change indicator, not an event count. On `Ok`, `out_sequence` receives the
+latest sequence. On other statuses it is left untouched.
+
+Phase 1 permits one active waiter per context. A competing waiter returns
+`Unavailable`. `context_stop_wake_waiters` is idempotent and permanent for
+that context: it wakes the active waiter, which returns the explicit
+`CaliberStatus::Stopped` value (`11`), and future waits also return `Stopped`.
+It does not stop normal context operations, create or join threads, or destroy
+the context. The frontend owns the waiter thread and must stop and join it
+before calling `context_destroy`. Context destruction does not coordinate
+with, stop, or wait for foreign threads; destroying while a waiter or other
+operation still uses the context violates the call contract.
+
+The functions are blocking/non-realtime operations and must not run on a GUI
+thread. New callers must check `struct_size` through the end of each appended
+function-table field before reading it. Existing table fields are not reordered
+or changed.
+
 ## ABI rejection and fuzzing
 
 Reject null pointers where a non-null slice is required, overflowed lengths,

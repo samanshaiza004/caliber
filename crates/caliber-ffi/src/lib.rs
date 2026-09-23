@@ -43,7 +43,7 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::ptr;
 use std::slice;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 
 /// The only ABI table version implemented by this experiment.
 pub const CALIBER_ABI_VERSION_1: u32 = 1;
@@ -90,6 +90,7 @@ pub enum CaliberStatus {
     QueueFull = 8,
     UnsupportedVersion = 9,
     Internal = 10,
+    Stopped = 11,
 }
 
 /// Caller-provided context limits.  `struct_size` permits a future table to
@@ -185,9 +186,10 @@ pub struct CaliberTelemetryInfo {
 }
 
 /// Versioned C function table.  A caller must check `abi_version` and
-/// `struct_size` before reading fields.  Function pointers are all optional in
-/// the C representation only for forward-compatible table truncation; version
-/// 1 returns every pointer below.
+/// `struct_size` before reading fields. Function pointers are all optional in
+/// the C representation only for forward-compatible table truncation. New
+/// entries are appended; callers must check `struct_size` through the end of a
+/// field before reading it.
 #[repr(C)]
 pub struct CaliberApiV1 {
     pub abi_version: u32,
@@ -251,6 +253,15 @@ pub struct CaliberApiV1 {
     >,
     pub context_wake_sequence:
         Option<unsafe extern "C" fn(*const CaliberContext, *mut u64) -> CaliberStatus>,
+    /// Block until the context wake sequence differs from `observed_sequence`
+    /// or wake waiters have been stopped. Appended to preserve the existing
+    /// function-table prefix.
+    pub context_wait_wake:
+        Option<unsafe extern "C" fn(*const CaliberContext, u64, *mut u64) -> CaliberStatus>,
+    /// Permanently stop wake waits for this context and unblock its waiter.
+    /// Appended to preserve the existing function-table prefix.
+    pub context_stop_wake_waiters:
+        Option<unsafe extern "C" fn(*const CaliberContext) -> CaliberStatus>,
 }
 
 /// The opaque context type used by the C ABI.
@@ -268,6 +279,14 @@ struct ContextInner {
     resource_slots: Mutex<ResourceSlots>,
     telemetry: LatestTelemetry,
     wake_sequence: AtomicU64,
+    wake_signal: Mutex<WakeSignal>,
+    wake_changed: Condvar,
+}
+
+#[derive(Default)]
+struct WakeSignal {
+    stopped: bool,
+    waiter_active: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -353,6 +372,8 @@ impl CaliberContext {
                 resource_slots: Mutex::new(ResourceSlots::new(limits.max_resources)?),
                 telemetry: LatestTelemetry::new(limits.telemetry_width).map_err(map_core_error)?,
                 wake_sequence: AtomicU64::new(0),
+                wake_signal: Mutex::new(WakeSignal::default()),
+                wake_changed: Condvar::new(),
             },
         }))
     }
@@ -491,9 +512,60 @@ impl CaliberContext {
     }
 
     fn bump_wake(&self) {
+        // The predicate mutex makes sequence publication and notification
+        // atomic with respect to the waiter's predicate/check-and-sleep path.
+        // This prevents a notify between predicate check and Condvar::wait.
+        let _signal = self
+            .inner
+            .wake_signal
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         // Wrapping is intentional: callers compare equality/change, not
         // arithmetic distance, and a u64 wrap is practically unreachable.
         self.inner.wake_sequence.fetch_add(1, Ordering::Release);
+        self.inner.wake_changed.notify_all();
+    }
+
+    fn wait_wake(&self, observed_sequence: u64) -> Result<u64, CaliberStatus> {
+        let mut signal = self
+            .inner
+            .wake_signal
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if signal.waiter_active {
+            return Err(CaliberStatus::Unavailable);
+        }
+        signal.waiter_active = true;
+
+        let result = loop {
+            // Stopped wins if stop and publication race, so shutdown is
+            // deterministic and the caller can proceed to join this waiter.
+            if signal.stopped {
+                break Err(CaliberStatus::Stopped);
+            }
+            let sequence = self.inner.wake_sequence.load(Ordering::Acquire);
+            if sequence != observed_sequence {
+                break Ok(sequence);
+            }
+            signal = self
+                .inner
+                .wake_changed
+                .wait(signal)
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+        };
+
+        signal.waiter_active = false;
+        result
+    }
+
+    fn stop_wake_waiters(&self) {
+        let mut signal = self
+            .inner
+            .wake_signal
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        signal.stopped = true;
+        self.inner.wake_changed.notify_all();
     }
 
     /// Publish a state payload from a native core adapter.  This is a Rust
@@ -778,13 +850,16 @@ pub unsafe extern "C" fn caliber_context_create(
     .unwrap_or(CaliberStatus::Internal)
 }
 
-/// Destroy a context.  Outstanding state/resource leases remain valid because
-/// they own their immutable bytes independently.  The pointer must not be
-/// used concurrently and must have come from `caliber_context_create`.
+/// Destroy a context. Outstanding state/resource leases remain valid because
+/// they own their immutable bytes independently. The pointer must not be used
+/// concurrently and must have come from `caliber_context_create`. Callers must
+/// first stop and join every in-flight `context_wait_wake` waiter; destruction
+/// does not stop, join, or otherwise wait for foreign threads.
 ///
 /// # Safety
 /// `context` must be null or a handle returned by `caliber_context_create`,
-/// with no concurrent operation still using it.
+/// with no concurrent operation or wake waiter still using it. In particular,
+/// call `caliber_context_stop_wake_waiters` and join the waiter before destroy.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn caliber_context_destroy(context: *mut CaliberContext) {
     let _ = catch_unwind(AssertUnwindSafe(|| {
@@ -1212,6 +1287,65 @@ pub unsafe extern "C" fn caliber_context_wake_sequence(
     .unwrap_or(CaliberStatus::Internal)
 }
 
+/// Block until the wake sequence differs from `observed_sequence` or wake
+/// waiters have been stopped. Publications may coalesce: the returned
+/// sequence is the latest value, not an event count. Only one waiter may be
+/// active per context; another concurrent waiter receives `Unavailable`.
+/// `out_sequence` is written only when this function returns `Ok`.
+///
+/// # Safety
+/// `context` must be a live handle that is not being destroyed, and
+/// `out_sequence` must point to writable caller-owned storage. The caller must
+/// arrange for this blocking call to be stopped and joined before destroying
+/// the context.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn caliber_context_wait_wake(
+    context: *const CaliberContext,
+    observed_sequence: u64,
+    out_sequence: *mut u64,
+) -> CaliberStatus {
+    catch_unwind(AssertUnwindSafe(|| {
+        if out_sequence.is_null() {
+            return CaliberStatus::InvalidArgument;
+        }
+        let context = match with_context(context) {
+            Ok(context) => context,
+            Err(status) => return status,
+        };
+        match context.wait_wake(observed_sequence) {
+            Ok(sequence) => {
+                // SAFETY: out_sequence was checked non-null and is caller-owned.
+                unsafe { *out_sequence = sequence };
+                CaliberStatus::Ok
+            }
+            Err(status) => status,
+        }
+    }))
+    .unwrap_or(CaliberStatus::Internal)
+}
+
+/// Permanently stop wake waits for this context and unblock its active waiter.
+/// This operation is idempotent. It does not stop context operations, destroy
+/// the context, or join the foreign waiter; the owner must join it before
+/// calling `context_destroy`.
+///
+/// # Safety
+/// `context` must be a live handle and must not be concurrently destroyed.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn caliber_context_stop_wake_waiters(
+    context: *const CaliberContext,
+) -> CaliberStatus {
+    catch_unwind(AssertUnwindSafe(|| {
+        let context = match with_context(context) {
+            Ok(context) => context,
+            Err(status) => return status,
+        };
+        context.stop_wake_waiters();
+        CaliberStatus::Ok
+    }))
+    .unwrap_or(CaliberStatus::Internal)
+}
+
 static API_V1: CaliberApiV1 = CaliberApiV1 {
     abi_version: CALIBER_ABI_VERSION_1,
     struct_size: std::mem::size_of::<CaliberApiV1>() as u32,
@@ -1230,6 +1364,8 @@ static API_V1: CaliberApiV1 = CaliberApiV1 {
     context_publish_telemetry: Some(caliber_context_publish_telemetry),
     context_read_latest_telemetry: Some(caliber_context_read_latest_telemetry),
     context_wake_sequence: Some(caliber_context_wake_sequence),
+    context_wait_wake: Some(caliber_context_wait_wake),
+    context_stop_wake_waiters: Some(caliber_context_stop_wake_waiters),
 };
 
 #[cfg(test)]
@@ -1248,7 +1384,233 @@ mod tests {
         let api = unsafe { &*api };
         assert_eq!(api.abi_version, CALIBER_ABI_VERSION_1);
         assert!(api.struct_size as usize >= std::mem::size_of::<CaliberApiV1>());
+        assert!(
+            std::mem::offset_of!(CaliberApiV1, context_wait_wake)
+                > std::mem::offset_of!(CaliberApiV1, context_wake_sequence)
+        );
+        assert!(
+            std::mem::offset_of!(CaliberApiV1, context_stop_wake_waiters)
+                > std::mem::offset_of!(CaliberApiV1, context_wait_wake)
+        );
+        assert!(api.context_wait_wake.is_some());
+        assert!(api.context_stop_wake_waiters.is_some());
         assert!(caliber_get_api(CALIBER_ABI_VERSION_1 + 1).is_null());
+    }
+
+    fn wait_until_waiter_active(context: &CaliberContext) -> bool {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        loop {
+            let signal = context
+                .inner
+                .wake_signal
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if signal.waiter_active {
+                return true;
+            }
+            drop(signal);
+            if std::time::Instant::now() >= deadline {
+                return false;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+    }
+
+    #[test]
+    fn blocking_wake_returns_after_sequence_advance() {
+        let context = context();
+        let raw = (&*context as *const CaliberContext) as usize;
+        let mut observed = 0;
+        assert_eq!(
+            unsafe { caliber_context_wake_sequence(&*context, &mut observed) },
+            CaliberStatus::Ok
+        );
+        let waiter = std::thread::spawn(move || {
+            let mut out_sequence = u64::MAX;
+            // SAFETY: the owning test keeps the context alive until this
+            // thread has joined; the numeric capture only makes the address
+            // transferable to the test thread.
+            let status = unsafe {
+                caliber_context_wait_wake(raw as *const CaliberContext, observed, &mut out_sequence)
+            };
+            (status, out_sequence)
+        });
+        if !wait_until_waiter_active(&context) {
+            unsafe { caliber_context_stop_wake_waiters(&*context) };
+            let _ = waiter.join();
+            panic!("wake waiter did not enter its blocking wait");
+        }
+        assert_eq!(context.dispatch(b"new work"), CaliberStatus::Ok);
+        let (status, out_sequence) = waiter.join().expect("waiter thread");
+        assert_eq!(status, CaliberStatus::Ok);
+        assert_ne!(out_sequence, observed);
+    }
+
+    #[test]
+    fn notification_before_wait_returns_immediately() {
+        let context = context();
+        assert_eq!(context.dispatch(b"already published"), CaliberStatus::Ok);
+        let mut out_sequence = 0;
+        // The sequence predicate, rather than an edge-triggered notification,
+        // makes a publication before the call observable without blocking.
+        assert_eq!(
+            unsafe { caliber_context_wait_wake(&*context, 0, &mut out_sequence) },
+            CaliberStatus::Ok
+        );
+        assert_eq!(out_sequence, 1);
+    }
+
+    #[test]
+    fn stopping_wake_waiters_unblocks_waiter_with_stopped_status() {
+        let context = context();
+        let raw = (&*context as *const CaliberContext) as usize;
+        let waiter = std::thread::spawn(move || {
+            let mut out_sequence = 0;
+            // SAFETY: the owning test keeps the context alive until join.
+            unsafe { caliber_context_wait_wake(raw as *const CaliberContext, 0, &mut out_sequence) }
+        });
+        if !wait_until_waiter_active(&context) {
+            unsafe { caliber_context_stop_wake_waiters(&*context) };
+            let _ = waiter.join();
+            panic!("wake waiter did not enter its blocking wait");
+        }
+        let mut competing_sequence = 0;
+        assert_eq!(
+            unsafe { caliber_context_wait_wake(&*context, 0, &mut competing_sequence) },
+            CaliberStatus::Unavailable
+        );
+        assert_eq!(
+            unsafe { caliber_context_stop_wake_waiters(&*context) },
+            CaliberStatus::Ok
+        );
+        assert_eq!(
+            unsafe { caliber_context_stop_wake_waiters(&*context) },
+            CaliberStatus::Ok
+        );
+        assert_eq!(
+            waiter.join().expect("waiter thread"),
+            CaliberStatus::Stopped
+        );
+        let mut sequence = 0;
+        assert_eq!(
+            unsafe { caliber_context_wait_wake(&*context, 0, &mut sequence) },
+            CaliberStatus::Stopped
+        );
+    }
+
+    #[test]
+    fn blocking_wake_ignores_spurious_condition_variable_notification() {
+        let context = context();
+        let raw = (&*context as *const CaliberContext) as usize;
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let waiter = std::thread::spawn(move || {
+            let mut sequence = 0;
+            // SAFETY: the owning test keeps the context alive until join.
+            let status = unsafe {
+                caliber_context_wait_wake(raw as *const CaliberContext, 0, &mut sequence)
+            };
+            let _ = sender.send((status, sequence));
+        });
+        if !wait_until_waiter_active(&context) {
+            unsafe { caliber_context_stop_wake_waiters(&*context) };
+            let _ = waiter.join();
+            panic!("wake waiter did not enter its blocking wait");
+        }
+
+        let signal = context
+            .inner
+            .wake_signal
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        context.inner.wake_changed.notify_all();
+        drop(signal);
+        let early_result = receiver.recv_timeout(std::time::Duration::from_millis(30));
+        assert_eq!(context.dispatch(b"real work"), CaliberStatus::Ok);
+        let result = match early_result {
+            Ok(result) => {
+                let _ = waiter.join();
+                panic!("spurious notification escaped as a wake: {result:?}");
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => receiver
+                .recv_timeout(std::time::Duration::from_secs(2))
+                .expect("sequence change wakes waiter"),
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                let _ = waiter.join();
+                panic!("wake waiter disconnected before sequence change");
+            }
+        };
+        waiter.join().expect("waiter thread");
+        assert_eq!(result.0, CaliberStatus::Ok);
+        assert_ne!(result.1, 0);
+    }
+
+    #[test]
+    fn accepted_state_resource_and_telemetry_changes_advance_wake_sequence() {
+        let context = context();
+        let mut observed = context.inner.wake_sequence.load(Ordering::Acquire);
+
+        assert_eq!(context.publish_state(1, b"state"), Ok(1));
+        let sequence = context.wait_wake(observed).expect("state wake");
+        assert_ne!(sequence, observed);
+        observed = sequence;
+
+        let (resource_id, generation) = context.publish_resource(b"resource").unwrap();
+        let sequence = context
+            .wait_wake(observed)
+            .expect("resource publication wake");
+        assert_ne!(sequence, observed);
+        observed = sequence;
+        assert_eq!(
+            context.release_resource(resource_id, generation),
+            CaliberStatus::Ok
+        );
+        let sequence = context.wait_wake(observed).expect("resource release wake");
+        assert_ne!(sequence, observed);
+        observed = sequence;
+
+        assert_eq!(
+            context.publish_telemetry(&[1, 2, 3, 4, 5, 6, 7, 8]),
+            CaliberStatus::Ok
+        );
+        let sequence = context.wait_wake(observed).expect("telemetry wake");
+        assert_ne!(sequence, observed);
+    }
+
+    #[test]
+    fn repeated_wake_waiter_start_stop_uses_fresh_contexts() {
+        for _ in 0..4 {
+            let mut raw = ptr::null_mut();
+            assert_eq!(
+                unsafe { caliber_context_create(ptr::null(), &mut raw) },
+                CaliberStatus::Ok
+            );
+            // SAFETY: raw was just created and remains owned by this test.
+            let context = unsafe { &*raw };
+            let address = raw as usize;
+            let waiter = std::thread::spawn(move || {
+                let mut sequence = 0;
+                // SAFETY: the test stops and joins this waiter before destroy.
+                unsafe {
+                    caliber_context_wait_wake(address as *const CaliberContext, 0, &mut sequence)
+                }
+            });
+            if !wait_until_waiter_active(context) {
+                unsafe { caliber_context_stop_wake_waiters(raw) };
+                let _ = waiter.join();
+                unsafe { caliber_context_destroy(raw) };
+                panic!("wake waiter did not enter its blocking wait");
+            }
+            assert_eq!(
+                unsafe { caliber_context_stop_wake_waiters(raw) },
+                CaliberStatus::Ok
+            );
+            assert_eq!(
+                waiter.join().expect("waiter thread"),
+                CaliberStatus::Stopped
+            );
+            // SAFETY: stop has been requested and the sole waiter was joined.
+            unsafe { caliber_context_destroy(raw) };
+        }
     }
 
     #[test]
