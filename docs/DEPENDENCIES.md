@@ -85,3 +85,24 @@ build Odin, Go, Rust, a GUI, or any particular application.
 Projects bootstrap the Caliber CLI separately from their dependency graph.
 The bootstrap pin identifies the source used to build the CLI itself; runtime
 dependencies and their revisions remain solely in `dependencies.lock.json`.
+
+## Project diagnostics and ABI check
+
+A project may declare its host tools and the path where its own build places a
+Caliber FFI library in the optional diagnostics section of
+caliber.config.json. Paths are relative to the project root and may differ by
+operating system. Caliber only inspects them; it does not install tools or
+build the project.
+
+The project wrapper can run:
+
+    caliber doctor
+    caliber check
+
+Doctor validates the local lock and managed checkouts without contacting
+remotes, reports declared tools found on PATH, loads the configured native
+library, and checks its architecture compatibility, requested ABI version,
+table extent, and required function entries. Check performs the same diagnosis,
+then creates and destroys a context while exercising command/state/resource
+operations and the wake/wait/stop/join lifecycle. It does not start a GUI.
+Use the optional --library PATH argument to inspect a specific artifact.

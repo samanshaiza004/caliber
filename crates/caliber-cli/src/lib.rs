@@ -9,6 +9,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+mod diagnostics;
+
 const LOCK_FILE: &str = "dependencies.lock.json";
 const CONFIG_FILE: &str = "caliber.config.json";
 const LOCK_SCHEMA: u32 = 1;
@@ -72,6 +74,8 @@ struct ProjectConfig {
     schema: u32,
     #[serde(default)]
     validation: BTreeMap<String, ValidationHook>,
+    #[serde(default)]
+    diagnostics: Option<diagnostics::DiagnosticsConfig>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -115,6 +119,14 @@ pub fn run(args: impl IntoIterator<Item = OsString>) -> Result<()> {
     let root = canonical_project_root(&root)?;
 
     match command {
+        "doctor" => {
+            let library = option_path(&args[1..], "--library")?;
+            diagnostics::doctor(&root, library.as_deref())
+        }
+        "check" => {
+            let library = option_path(&args[1..], "--library")?;
+            diagnostics::check(&root, library.as_deref())
+        }
         "sync" => {
             let (overrides, allow_dirty) = parse_overrides(&args[1..])?;
             let entries = read_lock(&root)?;
@@ -148,7 +160,7 @@ pub fn run(args: impl IntoIterator<Item = OsString>) -> Result<()> {
 }
 
 fn usage() -> &'static str {
-    "Usage:\n  caliber sync [--project-root DIR] [--override NAME=PATH ...] [--allow-dirty-overrides]\n  caliber status [--project-root DIR]\n  caliber update NAME [--project-root DIR]\n  caliber pin NAME LOCAL-CHECKOUT [--project-root DIR]"
+    "Usage:\n  caliber sync [--project-root DIR] [--override NAME=PATH ...] [--allow-dirty-overrides]\n  caliber status [--project-root DIR]\n  caliber doctor [--project-root DIR] [--library PATH]\n  caliber check [--project-root DIR] [--library PATH]\n  caliber update NAME [--project-root DIR]\n  caliber pin NAME LOCAL-CHECKOUT [--project-root DIR]"
 }
 
 fn positional<'a>(args: &'a [String], index: usize, label: &str) -> Result<&'a str> {

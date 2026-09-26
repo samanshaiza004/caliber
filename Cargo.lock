@@ -6,6 +6,7 @@ version = 4
 name = "caliber"
 version = "0.0.0"
 dependencies = [
+ "caliber-ffi",
  "serde",
  "serde_json",
 ]
