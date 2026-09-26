@@ -20,13 +20,13 @@ the application probably stays alive.”
 | Object | Allocates | Owns/mutates | Consumer may do | Valid until | Release/shutdown |
 | --- | --- | --- | --- | --- | --- |
 | Command bytes | Frontend or caller | Caller until dispatch accepts; application interprets after bounded decode | Read during dispatch only | The call's documented slice lifetime | No retained pointer; copy only if the application explicitly queues it |
-| State publication | Application/control side | Application creates the next immutable publication; Caliber swaps the visible reference atomically | Read complete publication while acknowledged/leased | Until acknowledge/release or the documented next-publication boundary | Retire only after the final consumer release; shutdown invalidates the context and reports it |
-| `ResourceId + generation` | Application registry | Application publishes immutable resource; Caliber tracks lease metadata | Map/read, never mutate | While lease is held and generation is live | Consumer releases lease; shutdown prevents new maps and reports expired leases |
-| Mapped bulk view | Application/resource registry | Resource owner; consumer is read-only | Read within pointer/length and format bounds | Exactly the lease interval | Consumer releases before or during shutdown according to the explicit shutdown result |
-| Latest telemetry slot | Producer side after setup | Producer writes the next slot/value; reader never mutates it | Read a coherent latest value and sequence | Until the next coherent read; no retained pointer | Slot storage is torn down only after producer/reader quiescence |
-| Ordered SPSC stream | Stream creator | One producer writes, one consumer reads | Read surviving ordered entries; cannot block producer | Until consumed or dropped by full-policy | Close/reset reports producer/consumer state and dropped counters |
+| State publication | Application/control side | Application creates the next immutable publication; Caliber swaps the visible reference atomically | Read complete publication while leased | Until the matching release; a lease may outlive context destruction | Release exactly once, including after context destruction |
+| `ResourceId + generation` | Application registry | Application publishes immutable resource; Caliber tracks lease metadata | Map/read, never mutate | Handle is usable only with a live context and its current generation | Retiring a handle prevents new maps; outstanding mapped views remain valid until released |
+| Mapped bulk view | Application/resource registry | Resource owner; consumer is read-only | Read within pointer/length and format bounds | Exactly the lease interval, including across context destruction | Consumer releases exactly once; no shutdown report is provided for outstanding leases |
+| Latest telemetry slot | Producer side after setup | One producer publishes a fixed-width `size_t` sample; readers only copy | Read a coherent newest sample and sequence | Until the next coherent read; no retained pointer | Samples overwrite history; context storage is destroyed only after producers/readers quiesce |
+| Ordered SPSC stream | Stream creator | One producer writes, one consumer reads | Read surviving ordered entries; cannot block producer | Until consumed or dropped by full-policy | Experimental `caliber-core` facility only; not part of the v0.1 foreign ABI |
 | Wake registration | Frontend adapter | Frontend owns callback/event-loop registration; Caliber stores only the minimal token | Trigger notification, not arbitrary reentrant work | Until unregister or backend shutdown | Unregister before destroying the callback target |
-| Application context | Application/control owner | Owner mutates all domain state; Caliber mediates calls and bounded channels | Use through documented ABI operations | Until explicit destroy | Destroy rejects new calls and invalidates child handles deterministically |
+| Application context | Application/control owner | Owner mutates all domain state; Caliber mediates calls and bounded channels | Use through documented ABI operations | Until explicit destroy | No operation may race destroy; the raw context pointer is invalid afterward |
 
 ## Bulk resource rules
 
@@ -74,6 +74,9 @@ metadata.
   callback, state serialization, or generic Caliber wakeup.
 - Destruction is a lifecycle operation with an explicit quiescence rule; it
   is not a best-effort drop of foreign pointers.
+- Generic ABI calls may allocate or lock and are not realtime-safe. The
+  internal telemetry slot's non-blocking write does not make the foreign
+  telemetry call realtime-safe because it also advances the wake signal.
 
 ## Shutdown checklist
 

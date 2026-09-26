@@ -1493,6 +1493,9 @@ mod tests {
             waiter.join().expect("waiter thread"),
             CaliberStatus::Stopped
         );
+        // Stopping waiters is not context destruction: ordinary operations
+        // remain valid until the owner quiesces and destroys the context.
+        assert_eq!(context.dispatch(b"after stop"), CaliberStatus::Ok);
         let mut sequence = 0;
         assert_eq!(
             unsafe { caliber_context_wait_wake(&*context, 0, &mut sequence) },
@@ -1659,6 +1662,33 @@ mod tests {
     }
 
     #[test]
+    fn released_resource_lease_survives_context_destroy() {
+        let context = context();
+        let (resource_id, generation) = context
+            .publish_resource(b"leased waveform")
+            .expect("resource publication");
+        let mut view = context
+            .map_resource(resource_id, generation)
+            .expect("resource view");
+        assert_eq!(
+            context.release_resource(resource_id, generation),
+            CaliberStatus::Ok
+        );
+
+        let raw = Box::into_raw(context);
+        // SAFETY: raw is exclusively owned; no context operation is in flight.
+        unsafe { caliber_context_destroy(raw) };
+
+        // Retiring the registry owner and destroying the context do not
+        // invalidate a separately leased immutable view.
+        let bytes = unsafe { slice::from_raw_parts(view.data, view.len) };
+        assert_eq!(bytes, b"leased waveform");
+        unsafe { caliber_resource_release(&mut view) };
+        assert!(view.data.is_null());
+        assert!(view.lease.is_null());
+    }
+
+    #[test]
     fn resource_generation_is_exact_and_release_clears_view() {
         let context = context();
         let (resource_id, generation) = context
@@ -1729,6 +1759,9 @@ mod tests {
         assert_eq!(status, CaliberStatus::BufferTooSmall);
         assert_eq!(info.sequence, 1);
         assert_eq!(info.value_count, 8);
+        assert_eq!(info.schema, 0);
+        assert_eq!(info.reserved, 0);
+        assert_eq!(info.value_size, size_of::<usize>());
         assert_eq!(out, [0, 0]);
         let mut out = [0_usize; 8];
         // SAFETY: pointers refer to live caller-owned storage.
@@ -1744,6 +1777,10 @@ mod tests {
             CaliberStatus::Ok
         );
         assert_eq!(&out, &[44, 8, 7, 6, 5, 4, 3, 2]);
+        assert_eq!(info.schema, 0);
+        assert_eq!(info.reserved, 0);
+        assert_eq!(info.value_count, 8);
+        assert_eq!(info.value_size, size_of::<usize>());
     }
 
     #[test]

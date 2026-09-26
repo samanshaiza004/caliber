@@ -33,6 +33,27 @@ The compatibility fixture in
 published v1 prefix before the two blocking wake functions were appended. It
 is intentionally frozen; changing it would weaken the regression.
 
+## Data-plane v0.1 decisions
+
+- The foreign ABI exposes immutable resources and latest-value telemetry. It
+  does not expose an ordered-stream API in v0.1. The SPSC stream in
+  `caliber-core` remains an internal Rust facility, not a foreign compatibility
+  promise. A future stream API must be justified by a real consumer and can be
+  added to v1 only as a compatible append-only table extension; otherwise it
+  requires a new ABI version.
+- A telemetry sample is one fixed-width array of exactly
+  `CaliberContextConfig.telemetry_width` native `size_t` values. The application
+  defines each value's meaning. `value_size` reports `sizeof(size_t)`;
+  `schema` and `reserved` are zero in ABI v1. A successful publication replaces
+  the previous complete sample, increments its sequence, and retains no
+  history. Reads copy a coherent sample into caller-owned storage.
+- This is an in-process native ABI, not a cross-architecture wire format.
+  Callers must match the library's pointer width. No generic Caliber operation
+  is promised to be realtime-safe; ABI calls may allocate or lock.
+
+For concurrency, lease lifetime, wake shutdown, and the required destroy order,
+see [`LIFECYCLE.md`](LIFECYCLE.md).
+
 ## Ownership and call behavior
 
 - Caliber owns each context returned by `context_create`; the caller must call

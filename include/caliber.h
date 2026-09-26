@@ -86,7 +86,13 @@ typedef struct CaliberResourceView {
     void *lease;
 } CaliberResourceView;
 
-/* Telemetry is copied into caller-owned storage; this record is not a lease. */
+/*
+ * Latest-value telemetry metadata. ABI v1 samples contain exactly
+ * CaliberContextConfig.telemetry_width native size_t values. value_size is
+ * sizeof(size_t); schema and reserved are zero in ABI v1. This is a
+ * same-process, same-pointer-width representation, not a wire format.
+ * Telemetry is copied into caller-owned storage; this record is not a lease.
+ */
 typedef struct CaliberTelemetryInfo {
     uint64_t sequence;
     uint32_t schema;
@@ -123,6 +129,7 @@ typedef struct CaliberApiV1 {
     void (*resource_release)(CaliberResourceView *);
     CaliberStatus (*context_publish_resource)(const CaliberContext *, const uint8_t *, size_t, uint64_t *, uint64_t *);
     CaliberStatus (*context_release_resource)(const CaliberContext *, uint64_t, uint64_t);
+    /* Replaces the whole fixed-width latest sample; does not retain history. */
     CaliberStatus (*context_publish_telemetry)(const CaliberContext *, const size_t *, size_t);
     /* Copies telemetry into caller storage; info is caller-owned metadata. */
     CaliberStatus (*context_read_latest_telemetry)(const CaliberContext *, size_t *, size_t, CaliberTelemetryInfo *);

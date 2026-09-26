@@ -54,6 +54,14 @@ int caliber_current_v1_client_run(const char *library_path) {
     config.telemetry_width = 1;
     CaliberStatus status = api->context_create(&config, &context);
     if (status != CALIBER_STATUS_OK || context == NULL) { result = 6; goto done; }
+    const size_t telemetry_in[] = {(size_t)0x12345};
+    size_t telemetry_out[] = {0};
+    CaliberTelemetryInfo telemetry_info = {0};
+    if (api->context_publish_telemetry(context, telemetry_in, 1) != CALIBER_STATUS_OK) { result = 12; goto done; }
+    if (api->context_read_latest_telemetry(context, telemetry_out, 1, &telemetry_info) != CALIBER_STATUS_OK ||
+        telemetry_out[0] != telemetry_in[0] || telemetry_info.sequence != 1 || telemetry_info.schema != 0 ||
+        telemetry_info.reserved != 0 || telemetry_info.value_count != 1 ||
+        telemetry_info.value_size != sizeof(size_t)) { result = 13; goto done; }
     uint64_t before = 0, after = 0;
     if (api->context_wake_sequence(context, &before) != CALIBER_STATUS_OK) { result = 7; goto done; }
     const uint8_t command[] = {'n', 'e', 'w'};
