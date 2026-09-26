@@ -956,7 +956,7 @@ fn validate_candidate(root: &Path, name: &str, revision: &str, candidate: &Path)
                 "malformed validation hook for {name}: command must not be empty"
             ))
         })?;
-    let candidate_text = candidate.to_string_lossy();
+    let candidate_text = hook_path(candidate);
     let mut process = Command::new(program);
     process
         .current_dir(root)
@@ -965,10 +965,10 @@ fn validate_candidate(root: &Path, name: &str, revision: &str, candidate: &Path)
                 .replace("{revision}", revision)
                 .replace("{dependency}", name)
         }))
-        .env("CALIBER_PROJECT_ROOT", root)
+        .env("CALIBER_PROJECT_ROOT", hook_path(root))
         .env("CALIBER_DEPENDENCY", name)
         .env("CALIBER_CANDIDATE_REVISION", revision)
-        .env("CALIBER_CANDIDATE_ROOT", candidate);
+        .env("CALIBER_CANDIDATE_ROOT", &candidate_text);
     let status = process.status().map_err(|error| {
         Error::new(format!(
             "validation command could not start for {name}: {program} ({error})"
@@ -980,6 +980,20 @@ fn validate_candidate(root: &Path, name: &str, revision: &str, candidate: &Path)
         )));
     }
     Ok(())
+}
+
+fn hook_path(path: &Path) -> String {
+    let path = path.to_string_lossy();
+    #[cfg(windows)]
+    {
+        if let Some(unc) = path.strip_prefix(r"\\?\UNC\") {
+            return format!(r"\\{unc}");
+        }
+        if let Some(path) = path.strip_prefix(r"\\?\") {
+            return path.to_owned();
+        }
+    }
+    path.into_owned()
 }
 
 fn write_lock_atomic(root: &Path, lock: &LockFile) -> Result<()> {

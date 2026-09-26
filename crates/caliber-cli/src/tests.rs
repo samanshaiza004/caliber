@@ -1,5 +1,6 @@
 use super::{
-    Dependency, LockFile, SyncState, pin_project, status_project, sync_project, update_project,
+    Dependency, LockFile, SyncState, hook_path, pin_project, status_project, sync_project,
+    update_project,
 };
 use std::collections::BTreeMap;
 use std::fs;
@@ -9,6 +10,19 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 static NEXT_TEMP: AtomicU64 = AtomicU64::new(0);
+
+#[cfg(windows)]
+#[test]
+fn hook_paths_strip_windows_extended_prefix_for_shell_consumers() {
+    assert_eq!(
+        hook_path(Path::new(r"\\?\C:\project\file")),
+        r"C:\project\file"
+    );
+    assert_eq!(
+        hook_path(Path::new(r"\\?\UNC\server\share\project")),
+        r"\\server\share\project"
+    );
+}
 
 struct TempDir(PathBuf);
 
