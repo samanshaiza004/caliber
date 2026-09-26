@@ -100,11 +100,16 @@ int caliber_old_v1_client_run(const char *library_path) {
 
     uint64_t resource_id = 0, generation = 0;
     if (api->context_publish_resource(context, state, sizeof(state), &resource_id, &generation) != CALIBER_STATUS_OK) { result = 12; goto done; }
+    uint64_t blocked_resource_id = 0, blocked_generation = 0;
+    if (api->context_publish_resource(context, state, sizeof(state), &blocked_resource_id, &blocked_generation) != CALIBER_STATUS_QUEUE_FULL) {
+        result = 20; goto done;
+    }
     CaliberResourceView view = {0};
     if (api->context_map_resource(context, resource_id, generation, &view) != CALIBER_STATUS_OK || view.len != sizeof(state) || view.data[4] != 'e') { result = 13; goto done; }
     api->resource_release(&view);
     if (api->context_release_resource(context, resource_id, generation) != CALIBER_STATUS_OK) { result = 14; goto done; }
-    if (api->context_publish_resource(context, state, sizeof(state), &resource_id, &generation) != CALIBER_STATUS_QUEUE_FULL) { result = 20; goto done; }
+    if (api->context_publish_resource(context, state, sizeof(state), &resource_id, &generation) != CALIBER_STATUS_OK) { result = 21; goto done; }
+    if (api->context_release_resource(context, resource_id, generation) != CALIBER_STATUS_OK) { result = 22; goto done; }
 
     const size_t telemetry[] = {17, 23};
     if (api->context_publish_telemetry(context, telemetry, 2) != CALIBER_STATUS_OK) { result = 15; goto done; }
