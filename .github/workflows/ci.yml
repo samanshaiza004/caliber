@@ -26,8 +26,8 @@ jobs:
       - run: cargo fmt --manifest-path experiments/synthetic-rust/Cargo.toml --all -- --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo clippy --manifest-path experiments/synthetic-rust/Cargo.toml --all-targets -- -D warnings
-      - run: cargo test --workspace
       - run: cargo build --workspace
+      - run: cargo test --workspace
       - run: cargo test --manifest-path experiments/synthetic-rust/Cargo.toml
       - run: cargo build --manifest-path experiments/synthetic-rust/Cargo.toml
 

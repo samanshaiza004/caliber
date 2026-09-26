@@ -1,4 +1,7 @@
-//! The experimental Caliber C ABI.
+//! The Caliber C ABI v1 implementation.
+//!
+//! The canonical public declaration is `include/caliber.h`; the test-only
+//! `caliber-abi-tests` package checks Rust layouts against that header.
 //!
 //! This crate intentionally exposes a very small, versioned function table.
 //! The application contract is opaque bytes: Caliber does not define a domain
@@ -28,10 +31,9 @@
 //! non-blocking mechanism and publish a bounded telemetry snapshot to a
 //! non-realtime consumer.
 //!
-//! This private ABI intentionally uses the target platform's `usize` for byte
-//! sizes and telemetry words.  Foreign callers must match the target's pointer
-//! width and use the reported `value_size`; this is not yet a cross-architecture
-//! stable wire ABI.
+//! ABI v1 intentionally uses the target platform's `usize` for byte sizes and
+//! telemetry words. Foreign callers must match the library's pointer width and
+//! use the reported `value_size`; this is not a cross-architecture wire ABI.
 
 use caliber_core::{
     ControlQueue, Error as CoreError, LatestTelemetry, ResourceHandle, ResourceRegistry,
@@ -95,7 +97,7 @@ pub enum CaliberStatus {
 
 /// Caller-provided context limits.  `struct_size` permits a future table to
 /// append fields without making old callers initialize them.  All size and
-/// count fields use target-platform `usize`; the experimental ABI is therefore
+/// count fields use target-platform `usize`; ABI v1 is therefore
 /// platform-width-specific until an explicit-width representation is proven
 /// necessary.
 #[repr(C)]
@@ -174,7 +176,7 @@ impl Default for CaliberResourceView {
 
 /// Read-only latest-value telemetry metadata.  The payload is copied into a
 /// caller buffer by `caliber_context_read_latest_telemetry`.  `value_size` is
-/// the target-platform `usize` width for each value in this experimental ABI.
+/// the target-platform `usize` width for each value in ABI v1.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
 pub struct CaliberTelemetryInfo {
