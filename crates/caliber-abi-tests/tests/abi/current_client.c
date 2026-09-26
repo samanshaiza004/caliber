@@ -18,6 +18,8 @@ static void close_module(CaliberModule module) { if (module != NULL) dlclose(mod
 
 typedef const CaliberApiV1 *(*GetApiProc)(uint32_t);
 
+_Static_assert(sizeof(CaliberStatus) == sizeof(int32_t), "CaliberStatus must be exactly int32_t");
+
 #if UINTPTR_MAX == UINT64_MAX
 _Static_assert(sizeof(CaliberApiV1) == 144, "current ABI v1 table size changed unexpectedly");
 _Static_assert(offsetof(CaliberApiV1, context_wake_sequence) == 120, "existing ABI v1 prefix moved");

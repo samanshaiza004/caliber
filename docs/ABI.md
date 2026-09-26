@@ -14,7 +14,8 @@ generator while mechanically detecting drift.
 
 ## Compatibility rules
 
-- Status numbers and the meaning of existing fields are permanent within v1.
+- `CaliberStatus` is a signed `int32_t`; status numbers and the meaning of
+  existing fields are permanent within v1.
 - Never reorder, remove, resize, or repurpose an existing v1 field or function
   table entry.
 - New `CaliberApiV1` entries are appended. A caller checks `abi_version` and

@@ -20,8 +20,11 @@
 extern "C" {
 #endif
 
-/* Result values are stable ABI numbers; do not renumber or reuse them. */
-typedef enum CaliberStatus {
+/* Result values are stable ABI numbers; do not renumber or reuse them.
+ * The C type is explicitly fixed-width to match Rust's repr(i32).
+ */
+typedef int32_t CaliberStatus;
+enum {
     CALIBER_STATUS_OK = 0,
     CALIBER_STATUS_INVALID_ARGUMENT = 1,
     CALIBER_STATUS_INVALID_HANDLE = 2,
@@ -34,7 +37,7 @@ typedef enum CaliberStatus {
     CALIBER_STATUS_UNSUPPORTED_VERSION = 9,
     CALIBER_STATUS_INTERNAL = 10,
     CALIBER_STATUS_STOPPED = 11
-} CaliberStatus;
+};
 
 /* Opaque context. The caller creates/destroys it through CaliberApiV1. */
 typedef struct CaliberContext CaliberContext;
