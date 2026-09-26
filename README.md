@@ -24,10 +24,12 @@ callers; it is not an ABI commitment.
 
 ## Repository shape
 
-Only two crates are kept:
+Only three crates are kept:
 
 - `caliber-core` — framework-neutral bounded mechanisms;
-- `caliber-ffi` — the provisional versioned C table over those mechanisms.
+- `caliber-ffi` — the provisional versioned C table over those mechanisms;
+- `caliber` — a separate developer CLI for exact-Git source dependencies. It
+  does not add dependency or build policy to `caliber-core`.
 
 The synthetic Rust and Go/cgo experiments are deliberately retained. They
 exercise the mechanisms with application-owned bytes without importing a GUI,
@@ -39,6 +41,7 @@ audio engine, or product schema.
 cargo fmt --all -- --check
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
+cargo run -p caliber -- --help
 cargo test --manifest-path experiments/synthetic-rust/Cargo.toml
 cargo run --manifest-path experiments/synthetic-rust/Cargo.toml
 python3 experiments/synthetic/trace_harness.py
@@ -46,6 +49,9 @@ python3 experiments/synthetic/trace_harness.py
 
 The Go smoke frontend requires cgo and a locally built native library. See
 [`experiments/go-ffi/README.md`](experiments/go-ffi/README.md).
+
+The developer CLI lock format, sync/status/update/pin semantics, and project
+validation hook are described in [`docs/DEPENDENCIES.md`](docs/DEPENDENCIES.md).
 
 The design, ABI notes, ownership ledger, experiment plan, results, and first
 real application pressure test are in [`docs/`](docs/). The current evidence

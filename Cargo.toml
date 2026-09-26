@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/caliber-core", "crates/caliber-ffi"]
+members = ["crates/caliber-core", "crates/caliber-ffi", "crates/caliber-cli"]
 resolver = "3"
 
 [workspace.package]
