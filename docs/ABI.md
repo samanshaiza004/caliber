@@ -1,9 +1,11 @@
 # Caliber C ABI
 
-Status: ABI v1 is the public, append-only foreign-language boundary for the
-Caliber experiment. Its canonical declaration is [`include/caliber.h`](../include/caliber.h).
-Consumers include that file from their exact Caliber source dependency; they do
-not maintain local copies of the Caliber records or function table.
+Caliber is pre-v0.1. Its first v0.1 release is intended to promise the C ABI v1
+as the stable, append-only foreign-language boundary. That promise starts with
+the release; pre-v0.1 candidates may still evolve. The canonical declaration
+is [`include/caliber.h`](../include/caliber.h). Consumers include that file
+from their exact Caliber source dependency; they do not maintain local copies
+of the Caliber records or function table.
 
 The C header is the ABI declaration source of truth. The Rust implementation
 uses `#[repr(C)]` records and is checked against the C compiler's size and
@@ -14,6 +16,11 @@ generator while mechanically detecting drift.
 
 ## Compatibility rules
 
+- The v0.1.x compatibility promise covers only the public C ABI described by
+  this header and this document: `caliber_get_api(1)`, public record layouts,
+  status values, function-table prefix rules, and ownership/lifecycle
+  semantics. It does not cover Rust APIs, crate versions, CLI behavior, lock
+  schema, or application-owned protocols.
 - `CaliberStatus` is a signed `int32_t`; status numbers and the meaning of
   existing fields are permanent within v1.
 - Never reorder, remove, resize, or repurpose an existing v1 field or function
@@ -27,6 +34,9 @@ generator while mechanically detecting drift.
   must match the library's process architecture and pointer width.
 - Any incompatible representation or semantic change requires a new ABI
   version and a new entry point. Do not silently reinterpret v1.
+- Before the first v0.1 release, the candidate may be revised. After that
+  release, an incompatible change requires a new table type and
+  `caliber_get_api(2)`; v1 remains available to supported v0.1.x consumers.
 
 The compatibility fixture in
 `crates/caliber-abi-tests/tests/fixtures/v1-prefix/caliber_v1_prefix.h` represents the

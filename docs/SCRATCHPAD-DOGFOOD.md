@@ -1,9 +1,11 @@
 # Scratchpad dogfood
 
-Status: Gates 1–4 edit-spike complete on the experimental `gpui-dogfood` branch; Caliber
-remains experimental, is being independently dogfooded, and has no stable API
-yet. This document records what the first real application changed and what
-the bounded data experiment actually measured.
+Status: Gates 1–4 edit-spike complete on the experimental `gpui-dogfood` branch.
+Caliber remains pre-v0.1 and is independently dogfooded. Its intended v0.1
+compatibility promise covers only C ABI v1 beginning with the first v0.1
+release; Rust APIs and developer tooling remain pre-1.0. This document records
+what the first real application changed and what the bounded data experiment
+actually measured.
 
 ## Application
 
@@ -185,7 +187,7 @@ semantic contract without making Scratchpad's domain package know about either
 GUI framework or disturbing the scalable editor. Gate 4 adds evidence for a
 source-edit seam, but not for a complete editor split: it currently excludes
 IME, viewport/layout ownership, and arbitrary-byte source-position mapping in
-Rust. The direct Go adapter remains cheaper than crossing the provisional C ABI,
+Rust. The direct Go adapter remains cheaper than crossing the Caliber C ABI,
 and the foreign path adds measurable copies, artifacts, and lifetime rules.
 
 This is evidence to **continue**, not to generalize. Keep Caliber's three-plane

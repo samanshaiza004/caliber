@@ -4,9 +4,10 @@
  * This header is the public ABI source of truth. The Rust implementation is
  * checked against its layouts by crates/caliber-abi-tests on all CI hosts.
  * Do not edit a consumer-local copy; include this file from the Caliber source
- * dependency. ABI v1 changes are append-only. Existing status values and
- * existing field order/meaning are frozen. An incompatible change requires
- * ABI v2.
+ * dependency. The first v0.1 release is intended to promise an append-only
+ * ABI v1; this pre-v0.1 candidate may still evolve. Once v0.1 is released,
+ * existing status values and field order/meaning are frozen. An incompatible
+ * change requires ABI v2.
  */
 #ifndef CALIBER_H
 #define CALIBER_H
@@ -20,7 +21,7 @@
 extern "C" {
 #endif
 
-/* Result values are stable ABI numbers; do not renumber or reuse them.
+/* ABI v1 result numbers; do not renumber or reuse them after the v0.1 release.
  * The C type is explicitly fixed-width to match Rust's repr(i32).
  */
 typedef int32_t CaliberStatus;

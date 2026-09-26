@@ -178,6 +178,7 @@ Record one of these outcomes with evidence:
 - **narrow extraction candidate:** two independent consumers and a stable,
   framework-neutral differentiator exist.
 
-Do not publish or promise compatibility merely because the synthetic backend
-passes. Passing tests establish a mechanism worth testing further, not a
-library worth maintaining.
+Do not infer the v0.1 compatibility promise from the synthetic backend alone.
+The intended ABI v1 promise is limited to the public C contract and begins only
+with the first v0.1 release. Passing tests establish useful mechanisms; they do
+not replace the external-developer gate or release checklist.

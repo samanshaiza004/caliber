@@ -1,7 +1,9 @@
 # Caliber experiment results
 
-Current status: **experimental, being independently dogfooded, no stable API
-yet**. The current verdict is recorded at the end of this document.
+Current status: **pre-v0.1 and being independently dogfooded**. The intended
+v0.1 compatibility promise covers only C ABI v1; Rust APIs and developer
+tooling remain pre-1.0. The external-developer readiness gate is still open.
+The current verdict is recorded at the end of this document.
 
 The extraction is now an independent repository with the original Caliber
 implementation history preserved as its root commit. The first real pressure
@@ -16,7 +18,7 @@ test is the Scratchpad semantic boundary documented in
 - The Rust synthetic backend exercises all three planes with application-owned
   schemas, a waveform resource, stale-command policy, malformed-state
   preservation, and deterministic trace replay.
-- The provisional C table has explicit pointer/length checks, bounded queues,
+- The C ABI v1 table has explicit pointer/length checks, bounded queues,
   lease cleanup, generation errors, short-config handling, panic containment,
   and Rust round-trip tests.
 - The Go cgo smoke frontend consumes the same table and exercises command
@@ -223,7 +225,8 @@ temporary source-mapping constraint.
 **continue**
 
 Continue only the narrow, framework-neutral experiment informed by Gate 4.
-Do not publish, promise ABI stability, add widgets or universal serialization,
-or route high-frequency editor mechanics through Caliber. A complete editor
-and IME/source-position design remain deferred until this small synchronization
-seam's costs justify them.
+Do not expand the v0.1 stability promise beyond C ABI v1, add widgets or
+universal serialization, or route high-frequency editor mechanics through
+Caliber. A complete editor and IME/source-position design remain deferred
+until this small synchronization seam's costs justify them. Do not release
+v0.1 until the external-developer gate and release checklist pass.
