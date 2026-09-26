@@ -1,6 +1,7 @@
+#[cfg(windows)]
+use super::hook_path;
 use super::{
-    Dependency, LockFile, SyncState, hook_path, pin_project, status_project, sync_project,
-    update_project,
+    Dependency, LockFile, SyncState, pin_project, status_project, sync_project, update_project,
 };
 use std::collections::BTreeMap;
 use std::fs;
@@ -221,9 +222,11 @@ fn developer_override_is_read_only_and_requires_explicit_dirty_opt_in() {
     let overrides = BTreeMap::from([("sample".into(), override_path.clone())]);
     assert!(sync_project(&fixture.project, &fixture.lock, &overrides, false).is_err());
     let head = git(Some(&override_path), &["rev-parse", "HEAD"]);
+    let actual_path =
+        sync_project(&fixture.project, &fixture.lock, &overrides, true).unwrap()["sample"].clone();
     assert_eq!(
-        sync_project(&fixture.project, &fixture.lock, &overrides, true).unwrap()["sample"],
-        override_path
+        fs::canonicalize(actual_path).unwrap(),
+        fs::canonicalize(&override_path).unwrap()
     );
     assert_eq!(git(Some(&fixture.source), &["rev-parse", "HEAD"]), head);
     assert!(fixture.source.join("local.txt").exists());
