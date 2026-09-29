@@ -31,10 +31,11 @@ test is the Scratchpad semantic boundary documented in
   intact. The proof is committed on the `caliber-dogfood` branch at
   [`8bfa8a6`](https://github.com/samanshaiza004/scratchpad/commit/8bfa8a6),
   and Scratchpad's application package remains Shirei-free.
-- Scratchpad's `gpui-dogfood` branch now consumes the same contract through the
-  real Go → Caliber → Rust path and adds a bounded optimistic source-edit
-  spike. The closeout is committed at
-  [`77dbc57`](https://github.com/samanshaiza004/scratchpad/commit/77dbc57).
+- Scratchpad's current `main` retains an experimental Rust/GPUI frontend that
+  consumes the same contract through the real Go → Caliber → Rust path and
+  includes a bounded optimistic source-edit spike. Its
+  [GPUI dogfood record](https://github.com/samanshaiza004/scratchpad/blob/main/docs/history/GPUI-DOGFOOD.md)
+  describes the measured path and its remaining limits.
 
 ## What the dogfood changed
 
@@ -146,11 +147,12 @@ and Scratchpad dogfood now test the narrower application-lifecycle hypothesis.
 
 ## GPUI second-frontend dogfood
 
-Scratchpad's `gpui-dogfood` branch now supplies the first materially different
-frontend attempt: Rust/GPUI shell → one Go c-shared backend → one linked
-Caliber `cdylib` → the unchanged Shirei-free Go application contract. The Rust
-package depends on `gpui-kit = "=0.6.1"` only; it does not depend on
-`caliber-ffi`.
+Scratchpad's current `main` contains the first materially different frontend
+attempt: Rust/GPUI shell → one Go c-shared backend → one linked Caliber
+`cdylib` → the unchanged Shirei-free Go application contract. The
+[dogfood record](https://github.com/samanshaiza004/scratchpad/blob/main/docs/history/GPUI-DOGFOOD.md)
+documents the implementation and measurements. The Rust package uses
+`gpui-kit = "=0.6.1"` for UI and does not link Caliber directly at runtime.
 
 The Gate 1 interface remains intentionally small: bounded shell state and one
 requested directory listing, plus open/select/save/close commands. Rust calls

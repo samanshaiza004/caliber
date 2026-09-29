@@ -1,48 +1,96 @@
 # Caliber
 
-Caliber is a small native boundary between application logic and presentation,
-allowing the application and UI to evolve independently and use different
-languages and GUI frameworks.
+Caliber is a small native lifecycle boundary for polyglot desktop applications.
+It coordinates bounded commands, revisioned state, leased immutable resources,
+generation-safe handles, coalescing wakeups, and explicit shutdown through a C
+ABI.
 
-Current status: **pre-v0.1 and being independently dogfooded**. The first v0.1
-release is intended to make only the C ABI v1 stable, as defined in
-[`docs/ABI.md`](docs/ABI.md). That compatibility promise begins with the first
-v0.1 release; this pre-release branch may still revise the candidate ABI.
-Caliber's Rust APIs, developer CLI, and dependency lock format remain
-pre-1.0 and may change. The Rust crates are not published to crates.io, and
-Caliber does not promise whole-project semantic-version compatibility or a
-stable Rust SDK.
+**Your application owns the schema and meaning. Caliber owns the boundary
+mechanics.** Caliber does not own application policy, domain state, or
+presentation.
 
-Caliber supplies bounded ownership and transport mechanisms. The application
-still owns its meaning, schemas, policy, and domain state:
+## When Caliber fits
 
-- **control** — ordered, bounded semantic commands and events;
-- **state** — atomic revisioned publication of complete application state;
-- **data** — immutable bulk resources, latest-value telemetry, and a Rust-core
-  SPSC stream facility. Ordered streams are not part of the v0.1 foreign ABI.
+Caliber is useful when an application needs to keep its domain and presentation
+independent across language or GUI-framework boundaries, and needs an explicit
+contract for ownership, bounded work, state publication, resource lifetime,
+notification, and shutdown. It is an in-process native ABI, not IPC.
 
-Caliber is not a GUI framework, renderer, window system, audio engine, Wasm
-runtime, async runtime, IPC protocol, universal object model, or application
-schema. Foreign callers use the canonical [`include/caliber.h`](include/caliber.h)
-and `caliber_get_api(1)` table. The planned v0.1 promise applies only to that
-ABI, not to the `caliber-ffi` Rust API.
+If the application and UI live comfortably in one language and framework, and
+there is no real need to replace the presentation boundary, prefer direct
+integration. It is simpler, cheaper, and avoids foreign-runtime and packaging
+costs. Caliber adds FFI glue, library packaging/loading, ownership rules, and
+some bounded copying; it is not a free abstraction.
+
+## Lifecycle at a glance
+
+```text
+Frontend                         Application
+   |                                 |
+   | dispatch(command)               |
+   +-----------> Caliber ----------->|
+   |                                 | process command
+   |                  publish_state()|
+   |<------ wake ----- Caliber <-----+
+   |                                 |
+   | read_latest_state()             |
+   +-----------> Caliber             |
+   |<------ immutable lease          |
+   |                                 |
+   | render                          |
+   | release(lease)                  |
+   +-----------> Caliber             |
+```
+
+Commands are bounded and copied; state publications are atomic and revisioned;
+resources are immutable and generation-checked; wakeups may coalesce; leases
+have explicit release; and shutdown has an explicit order. Caliber does not
+select a serializer or define the payload schemas.
+
+## Cost and dogfood evidence
+
+The boundary has measurable costs. In the Scratchpad GPUI dogfood, a warm
+command-to-visible-resource round trip over a 9.6 KiB fixture measured 84.8 µs
+median and 118.1 µs p95 on an Apple M1 (64 samples). The path includes Rust
+dispatch, Go command handling and resource publication, response decoding, and
+Rust resource mapping/copying; it is not a measurement of Caliber alone. The
+optimized runtime consisted of a Rust executable, Go shared backend, and
+Caliber library. Settled RSS was not sampled. Read the
+[Scratchpad dogfood measurements](docs/SCRATCHPAD-DOGFOOD.md) and
+[experiment results](docs/EXPERIMENT-RESULTS.md), plus Scratchpad's
+[GPUI dogfood report](https://github.com/samanshaiza004/scratchpad/blob/main/docs/history/GPUI-DOGFOOD.md),
+for the scope and limitations of those numbers. Alicorn Scope provides a
+second Go-to-native-frontend consumer; its
+[validation record](https://github.com/samanshaiza004/alicorn-scope/blob/master/docs/validation.md)
+separates application/parser measurements from Caliber transport costs.
+
+## Five-minute orientation
+
+Start with the [getting-started guide](docs/GETTING-STARTED.md), then build the
+canonical C example and the third-language example. The C header is the
+foreign-language contract: [`include/caliber.h`](include/caliber.h).
+
+## Stability
+
+Caliber is pre-v0.1. The first v0.1 release is intended to stabilize only the
+append-only C ABI v1 described in [`docs/ABI.md`](docs/ABI.md); that promise
+begins with the release, and this candidate may still change before then.
+Caliber's Rust APIs, developer CLI, dependency lock format, and application
+payload schemas remain pre-1.0 and may change. Rust crates are not published to
+crates.io. This is not a promise of whole-project semantic-version stability.
 
 ## Repository shape
 
-The workspace contains:
+- `caliber-core` contains framework-neutral bounded mechanisms.
+- `caliber-ffi` implements the versioned C table over those mechanisms.
+- `caliber` is a developer CLI for exact-Git source dependencies; it does not
+  add dependency or build policy to `caliber-core`.
+- `caliber-abi-tests` checks C/Rust layout and frozen-client compatibility.
+- `examples/` contains small consumers of the public ABI.
 
-- `caliber-core` — framework-neutral bounded mechanisms;
-- `caliber-ffi` — the versioned C table over those mechanisms;
-- `caliber` — a separate developer CLI for exact-Git source dependencies. It
-  does not add dependency or build policy to `caliber-core`.
-- `caliber-abi-tests` — C/Rust layout and frozen-client compatibility checks.
-
-All Rust crates are unpublished and their Rust APIs are outside the v0.1 ABI
-compatibility promise.
-
-The synthetic Rust and Go/cgo experiments are deliberately retained. They
-exercise the mechanisms with application-owned bytes without importing a GUI,
-audio engine, or product schema.
+The synthetic Rust and Go/cgo experiments exercise the mechanisms with
+application-owned bytes without importing a GUI, audio engine, or product
+schema.
 
 ## Run locally
 
@@ -59,17 +107,19 @@ python3 experiments/synthetic/trace_harness.py
 The Go smoke frontend requires cgo and a locally built native library. See
 [`experiments/go-ffi/README.md`](experiments/go-ffi/README.md).
 
-The developer CLI lock format, sync/status/update/pin semantics, and project
-validation hook are described in [`docs/DEPENDENCIES.md`](docs/DEPENDENCIES.md).
-The narrow v0.1 compatibility target and release gate are described in
-[`docs/RELEASE-CHECKLIST.md`](docs/RELEASE-CHECKLIST.md).
+## Documentation
 
-The design, ABI and lifecycle notes, release checklist, ownership ledger,
-experiment plan, results, and first
-real application pressure test are in [`docs/`](docs/). The current evidence
-and verdict are recorded in
-[`docs/EXPERIMENT-RESULTS.md`](docs/EXPERIMENT-RESULTS.md) and
-[`docs/SCRATCHPAD-DOGFOOD.md`](docs/SCRATCHPAD-DOGFOOD.md).
+- [Getting started](docs/GETTING-STARTED.md)
+- [ABI v1 and compatibility](docs/ABI.md)
+- [Lifecycle and shutdown](docs/LIFECYCLE.md)
+- [Serialization and data-plane choices](docs/SERIALIZATION.md)
+- [Errors and debugging](docs/DEBUGGING.md)
+- [When not to use Caliber](docs/WHY-NOT.md)
+- [Ownership and threading](docs/OWNERSHIP.md)
+- [Developer dependency CLI](docs/DEPENDENCIES.md)
+- [v0.1 release checklist](docs/RELEASE-CHECKLIST.md)
+- [Scratchpad dogfood](docs/SCRATCHPAD-DOGFOOD.md)
+- [Experiment results](docs/EXPERIMENT-RESULTS.md)
 
 Licensed under either the MIT License or Apache License, Version 2.0, at your
 option. See [`LICENSE-MIT`](LICENSE-MIT) and [`LICENSE-APACHE`](LICENSE-APACHE).

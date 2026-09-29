@@ -47,6 +47,30 @@ jobs:
       - run: cargo run --manifest-path experiments/synthetic-rust/Cargo.toml
       - run: python3 experiments/synthetic/trace_harness.py
       - run: cargo build -p caliber-ffi
+      - name: Run canonical C lifecycle example
+        shell: bash
+        run: |
+          case "$RUNNER_OS" in
+            macOS) library="$GITHUB_WORKSPACE/target/debug/libcaliber_ffi.dylib" ;;
+            *) library="$GITHUB_WORKSPACE/target/debug/libcaliber_ffi.so" ;;
+          esac
+          output="$RUNNER_TEMP/caliber-c-lifecycle"
+          if [ "$RUNNER_OS" = Linux ]; then
+            cc -std=c11 -Wall -Wextra -Werror -pthread -I include \
+              examples/c-counter/lifecycle.c -ldl -o "$output"
+          else
+            cc -std=c11 -Wall -Wextra -Werror -pthread -I include \
+              examples/c-counter/lifecycle.c -o "$output"
+          fi
+          "$output" "$library"
+      - name: Run illustrative Python ctypes consumer
+        shell: bash
+        run: |
+          case "$RUNNER_OS" in
+            macOS) library="$GITHUB_WORKSPACE/target/debug/libcaliber_ffi.dylib" ;;
+            *) library="$GITHUB_WORKSPACE/target/debug/libcaliber_ffi.so" ;;
+          esac
+          python3 examples/python-ctypes/lifecycle.py "$library"
       - name: Run Go cgo smoke
         working-directory: experiments/go-ffi
         shell: bash
