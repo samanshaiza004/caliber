@@ -1,0 +1,12 @@
+{
+  "schema": 1,
+  "diagnostics": {
+    "required_tools": ["git", "cargo", "rustc"],
+    "caliber_library": {
+      "windows": "build/caliber/debug/caliber_ffi.dll",
+      "macos": "build/caliber/debug/libcaliber_ffi.dylib",
+      "linux": "build/caliber/debug/libcaliber_ffi.so"
+    },
+    "requested_abi": 1
+  }
+}

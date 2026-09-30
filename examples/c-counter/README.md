@@ -29,6 +29,5 @@ cl /nologo /std:c11 /W4 /WX /I include examples\c-counter\lifecycle.c `
 .\caliber-c-lifecycle.exe (Resolve-Path target\debug\caliber_ffi.dll)
 ```
 
-The example is compiled and run against the freshly built library on Linux and
-macOS in the `experiments` CI job. The Windows branch uses the Windows loader
-and thread APIs, while Windows compiler invocation is shown above.
+The example is compiled and run against the freshly built library on Windows,
+macOS, and Linux by the `fresh-consumer` CI job.

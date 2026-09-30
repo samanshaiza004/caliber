@@ -134,7 +134,7 @@ int main(int argc, char **argv) {
     CaliberModule module = NULL;
     CaliberContext *context = NULL;
     const CaliberApiV1 *api = NULL;
-    ExampleThread thread;
+    ExampleThread thread = {0};
     int thread_joinable = 0;
     Waiter waiter;
     CaliberStatePublication state_view = {0};
