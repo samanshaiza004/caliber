@@ -1,0 +1,8 @@
+{
+  "schema": 1,
+  "caliber": {
+    "repository": "https://github.com/samanshaiza004/caliber.git",
+    "ref": "main",
+    "revision": "42722054ce8c0379bd3096affaccbf3b386c067e"
+  }
+}

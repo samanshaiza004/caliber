@@ -10,6 +10,27 @@ env:
   RUSTFLAGS: "-D warnings"
 
 jobs:
+  fresh-consumer:
+    name: fresh consumer (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+      - name: Set up MSVC compiler
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+      - name: Build Caliber CLI
+        run: cargo build -p caliber
+      - name: Resolve and test a fresh pinned consumer
+        run: python tools/ci/fresh_consumer.py
+
   rust:
     name: rust quality (${{ matrix.os }})
     runs-on: ${{ matrix.os }}

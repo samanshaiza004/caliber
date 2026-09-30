@@ -19,5 +19,5 @@ python3 examples/python-ctypes/lifecycle.py "$PWD/target/debug/libcaliber_ffi.so
 ```
 
 Use `target/debug/libcaliber_ffi.dylib` on macOS or
-`target/debug/caliber_ffi.dll` on Windows. The example is exercised in the
-Linux and macOS `experiments` CI job.
+`target/debug/caliber_ffi.dll` on Windows. The example is exercised on
+Windows, macOS, and Linux by the `fresh-consumer` CI job.
