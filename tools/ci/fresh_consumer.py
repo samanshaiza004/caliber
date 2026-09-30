@@ -34,8 +34,8 @@ def library_path(target_root: Path) -> Path:
     raise RuntimeError(f"unsupported CI platform: {system}")
 
 
-def build_c_consumer(dependency_root: Path, output: Path) -> None:
-    source = dependency_root / "examples" / "c-counter" / "lifecycle.c"
+def build_c_consumer(dependency_root: Path, source_root: Path, output: Path) -> None:
+    source = source_root / "examples" / "c-counter" / "lifecycle.c"
     header = dependency_root / "include"
 
     if os.name == "nt" and shutil.which("cl"):
@@ -154,12 +154,12 @@ def main() -> None:
         c_binary = consumer_root / (
             "caliber-c-lifecycle.exe" if os.name == "nt" else "caliber-c-lifecycle"
         )
-        build_c_consumer(dependency_root, c_binary)
+        build_c_consumer(dependency_root, REPO_ROOT, c_binary)
         run([str(c_binary), str(library)], consumer_root)
         run(
             [
                 sys.executable,
-                str(dependency_root / "examples" / "python-ctypes" / "lifecycle.py"),
+                str(REPO_ROOT / "examples" / "python-ctypes" / "lifecycle.py"),
                 str(library),
             ],
             consumer_root,
