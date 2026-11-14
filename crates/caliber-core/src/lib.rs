@@ -845,14 +845,7 @@ struct StreamSlot<T> {
     value: std::cell::UnsafeCell<MaybeUninit<T>>,
 }
 
-/// A preallocated non-blocking SPSC ring buffer.
-///
-/// `T` is required to be `Copy` so dropping the stream cannot leak or double
-/// drop values that are concurrently moving through slots. Exactly one thread
-/// may call [`Self::push`] and exactly one thread may call [`Self::pop`].
-/// `push` never allocates or blocks. A full push returns [`StreamError::Full`]
-/// and increments [`Self::dropped_count`].
-pub struct SpscStream<T: Copy + Send> {
+struct StreamInner<T: Copy + Send> {
     slots: Box<[StreamSlot<T>]>,
     capacity: usize,
     read: AtomicUsize,
@@ -860,18 +853,167 @@ pub struct SpscStream<T: Copy + Send> {
     dropped: AtomicU64,
 }
 
-unsafe impl<T: Copy + Send> Send for SpscStream<T> {}
-unsafe impl<T: Copy + Send> Sync for SpscStream<T> {}
+// SAFETY: The only slot accesses are through the unique producer and consumer
+// created by `SpscStream::split`. Their mutable methods prevent concurrent
+// accesses by two producers or two consumers, even if a handle is shared behind
+// synchronization. Release/Acquire on the indices transfers each initialized
+// slot from producer to consumer and back before it can be reused. `T: Send`
+// permits transferring the copied value between those threads.
+unsafe impl<T: Copy + Send> Sync for StreamInner<T> {}
 
-impl<T: Copy + Send> fmt::Debug for SpscStream<T> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("SpscStream")
-            .field("capacity", &self.capacity)
-            .field("len", &self.len())
-            .field("dropped", &self.dropped_count())
-            .finish()
+impl<T: Copy + Send> StreamInner<T> {
+    fn len(&self) -> usize {
+        let read = self.read.load(Ordering::Acquire);
+        let write = self.write.load(Ordering::Acquire);
+        if write >= read {
+            write - read
+        } else {
+            self.slots.len() - (read - write)
+        }
     }
 }
+
+/// A preallocated non-blocking SPSC ring buffer, before its endpoints are split.
+///
+/// [`Self::split`] consumes the stream and yields exactly one non-cloneable
+/// [`SpscProducer`] and one non-cloneable [`SpscConsumer`]. Each endpoint can
+/// be moved to its own thread. Its operations require exclusive mutable access,
+/// so safe code cannot use an endpoint concurrently without synchronization.
+/// The storage stays alive until both endpoints are dropped. `T` is `Copy` so
+/// queued values can be discarded when the last endpoint is dropped.
+///
+/// ```
+/// use caliber_core::{SpscStream, StreamError};
+/// let (mut producer, mut consumer) = SpscStream::new(1).unwrap().split();
+/// assert_eq!(producer.push(10), Ok(()));
+/// assert_eq!(producer.push(20), Err(StreamError::Full));
+/// assert_eq!(consumer.pop(), Some(10));
+/// assert_eq!(consumer.dropped_count(), 1);
+/// ```
+///
+/// Multiple producers cannot use the original shared-stream API:
+///
+/// ```compile_fail
+/// use caliber_core::SpscStream;
+/// use std::{sync::Arc, thread};
+/// let stream = Arc::new(SpscStream::new(2).unwrap());
+/// let first = Arc::clone(&stream);
+/// let second = Arc::clone(&stream);
+/// thread::spawn(move || first.push(1_u8));
+/// thread::spawn(move || second.push(2_u8));
+/// ```
+///
+/// Multiple consumers cannot use the original shared-stream API:
+///
+/// ```compile_fail
+/// use caliber_core::SpscStream;
+/// use std::{sync::Arc, thread};
+/// let stream = Arc::new(SpscStream::<u8>::new(2).unwrap());
+/// let first = Arc::clone(&stream);
+/// let second = Arc::clone(&stream);
+/// thread::spawn(move || first.pop());
+/// thread::spawn(move || second.pop());
+/// ```
+///
+/// Splitting consumes the stream, so it cannot create another endpoint pair:
+///
+/// ```compile_fail
+/// use caliber_core::SpscStream;
+/// let stream = SpscStream::<u8>::new(2).unwrap();
+/// let _endpoints = stream.split();
+/// let _more_endpoints = stream.split();
+/// ```
+pub struct SpscStream<T: Copy + Send> {
+    inner: Arc<StreamInner<T>>,
+}
+
+/// The sole producer for a split [`SpscStream`].
+///
+/// It is movable between threads, but cannot be cloned:
+///
+/// ```compile_fail
+/// use caliber_core::SpscStream;
+/// let (producer, _consumer) = SpscStream::<u8>::new(2).unwrap().split();
+/// let _another = producer.clone();
+/// ```
+///
+/// An `Arc` does not provide the mutable access required to push:
+///
+/// ```compile_fail
+/// use caliber_core::SpscStream;
+/// use std::{sync::Arc, thread};
+/// let (producer, _consumer) = SpscStream::<u8>::new(2).unwrap().split();
+/// let producer = Arc::new(producer);
+/// let other = Arc::clone(&producer);
+/// thread::spawn(move || other.push(1));
+/// ```
+pub struct SpscProducer<T: Copy + Send> {
+    inner: Arc<StreamInner<T>>,
+}
+
+/// The sole consumer for a split [`SpscStream`].
+///
+/// It is movable between threads, but cannot be cloned:
+///
+/// ```compile_fail
+/// use caliber_core::SpscStream;
+/// let (_producer, consumer) = SpscStream::<u8>::new(2).unwrap().split();
+/// let _another = consumer.clone();
+/// ```
+///
+/// An `Arc` does not provide the mutable access required to pop:
+///
+/// ```compile_fail
+/// use caliber_core::SpscStream;
+/// use std::{sync::Arc, thread};
+/// let (_producer, consumer) = SpscStream::<u8>::new(2).unwrap().split();
+/// let consumer = Arc::new(consumer);
+/// let other = Arc::clone(&consumer);
+/// thread::spawn(move || other.pop());
+/// ```
+pub struct SpscConsumer<T: Copy + Send> {
+    inner: Arc<StreamInner<T>>,
+}
+
+macro_rules! stream_observers {
+    ($endpoint:ident) => {
+        impl<T: Copy + Send> $endpoint<T> {
+            /// Returns an approximate snapshot of the number of queued values.
+            pub fn len(&self) -> usize {
+                self.inner.len()
+            }
+
+            /// Returns whether the approximate queue length is zero.
+            pub fn is_empty(&self) -> bool {
+                self.len() == 0
+            }
+
+            /// Returns how many pushes were rejected because the stream was full.
+            pub fn dropped_count(&self) -> u64 {
+                self.inner.dropped.load(Ordering::Acquire)
+            }
+
+            /// Returns the configured number of usable slots.
+            pub fn capacity(&self) -> usize {
+                self.inner.capacity
+            }
+        }
+
+        impl<T: Copy + Send> fmt::Debug for $endpoint<T> {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.debug_struct(stringify!($endpoint))
+                    .field("capacity", &self.capacity())
+                    .field("len", &self.len())
+                    .field("dropped", &self.dropped_count())
+                    .finish()
+            }
+        }
+    };
+}
+
+stream_observers!(SpscStream);
+stream_observers!(SpscProducer);
+stream_observers!(SpscConsumer);
 
 impl<T: Copy + Send> SpscStream<T> {
     /// Allocates a stream with exactly `capacity` usable values.
@@ -890,11 +1032,13 @@ impl<T: Copy + Send> SpscStream<T> {
             value: std::cell::UnsafeCell::new(MaybeUninit::uninit()),
         });
         Ok(Self {
-            slots: slots.into_boxed_slice(),
-            capacity,
-            read: AtomicUsize::new(0),
-            write: AtomicUsize::new(0),
-            dropped: AtomicU64::new(0),
+            inner: Arc::new(StreamInner {
+                slots: slots.into_boxed_slice(),
+                capacity,
+                read: AtomicUsize::new(0),
+                write: AtomicUsize::new(0),
+                dropped: AtomicU64::new(0),
+            }),
         })
     }
 
@@ -903,55 +1047,57 @@ impl<T: Copy + Send> SpscStream<T> {
         Self::new(DEFAULT_STREAM_CAPACITY).expect("default stream capacity is valid")
     }
 
-    /// Attempts to append one value without blocking.
-    pub fn push(&self, value: T) -> Result<(), StreamError> {
-        let write = self.write.load(Ordering::Relaxed);
-        let next = (write + 1) % self.slots.len();
-        if next == self.read.load(Ordering::Acquire) {
-            self.dropped.fetch_add(1, Ordering::Relaxed);
+    /// Consumes this stream and creates its sole producer and consumer.
+    pub fn split(self) -> (SpscProducer<T>, SpscConsumer<T>) {
+        let inner = self.inner;
+        (
+            SpscProducer {
+                inner: Arc::clone(&inner),
+            },
+            SpscConsumer { inner },
+        )
+    }
+}
+
+impl<T: Copy + Send> SpscProducer<T> {
+    /// Attempts to append one value without allocating or blocking.
+    ///
+    /// A full push returns [`StreamError::Full`] and increments the dropped
+    /// counter. The rejected value is not retained by the stream.
+    pub fn push(&mut self, value: T) -> Result<(), StreamError> {
+        let inner = &self.inner;
+        let write = inner.write.load(Ordering::Relaxed);
+        let next = (write + 1) % inner.slots.len();
+        if next == inner.read.load(Ordering::Acquire) {
+            inner.dropped.fetch_add(1, Ordering::Relaxed);
             return Err(StreamError::Full);
         }
-        // SAFETY: the single producer owns this write index until it publishes
-        // `next` with Release; the consumer only reads after Acquire.
-        unsafe { (*self.slots[write].value.get()).write(value) };
-        self.write.store(next, Ordering::Release);
+        // SAFETY: this is the unique producer, accessed mutably, and the
+        // Acquire read index confirms the consumer finished using this slot.
+        // The consumer sees the write only after the Release publication.
+        unsafe { (*inner.slots[write].value.get()).write(value) };
+        inner.write.store(next, Ordering::Release);
         Ok(())
     }
+}
 
-    /// Removes the oldest value, or returns `None` when the stream is empty.
-    pub fn pop(&self) -> Option<T> {
-        let read = self.read.load(Ordering::Relaxed);
-        if read == self.write.load(Ordering::Acquire) {
+impl<T: Copy + Send> SpscConsumer<T> {
+    /// Removes the oldest value without allocating or blocking, or returns
+    /// `None` when the stream is empty.
+    pub fn pop(&mut self) -> Option<T> {
+        let inner = &self.inner;
+        let read = inner.read.load(Ordering::Relaxed);
+        if read == inner.write.load(Ordering::Acquire) {
             return None;
         }
-        // SAFETY: the producer published this slot with Release and does not
-        // reuse it until the consumer publishes the next read index.
-        let value = unsafe { (*self.slots[read].value.get()).assume_init_read() };
-        self.read
-            .store((read + 1) % self.slots.len(), Ordering::Release);
+        // SAFETY: this is the unique consumer, accessed mutably. The Acquire
+        // write index confirms the producer initialized this slot, and it
+        // cannot be reused until the read index is published with Release.
+        let value = unsafe { (*inner.slots[read].value.get()).assume_init_read() };
+        inner
+            .read
+            .store((read + 1) % inner.slots.len(), Ordering::Release);
         Some(value)
-    }
-
-    /// Returns the approximate number of queued values.
-    pub fn len(&self) -> usize {
-        let read = self.read.load(Ordering::Acquire);
-        let write = self.write.load(Ordering::Acquire);
-        (write + self.slots.len() - read) % self.slots.len()
-    }
-
-    /// Returns whether no values are queued.
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-
-    /// Returns how many pushes were rejected because the stream was full.
-    pub fn dropped_count(&self) -> u64 {
-        self.dropped.load(Ordering::Acquire)
-    }
-
-    /// Returns the configured number of usable slots.
-    pub fn capacity(&self) -> usize {
-        self.capacity
     }
 }
 
@@ -1313,13 +1459,24 @@ mod tests {
     #[test]
     fn stream_reports_explicit_overflow_and_preserves_order() {
         let stream = SpscStream::new(2).unwrap();
-        assert_eq!(stream.push(10), Ok(()));
-        assert_eq!(stream.push(20), Ok(()));
-        assert_eq!(stream.push(30), Err(StreamError::Full));
-        assert_eq!(stream.dropped_count(), 1);
-        assert_eq!(stream.pop(), Some(10));
-        assert_eq!(stream.pop(), Some(20));
-        assert_eq!(stream.pop(), None);
+        assert_eq!(stream.capacity(), 2);
+        assert!(stream.is_empty());
+        let (mut producer, mut consumer) = stream.split();
+        assert_eq!(producer.capacity(), 2);
+        assert_eq!(consumer.capacity(), 2);
+        assert_eq!(producer.push(10), Ok(()));
+        assert_eq!(producer.push(20), Ok(()));
+        assert_eq!(producer.len(), 2);
+        assert_eq!(producer.push(30), Err(StreamError::Full));
+        assert_eq!(producer.dropped_count(), 1);
+        assert_eq!(consumer.dropped_count(), 1);
+        assert_eq!(consumer.pop(), Some(10));
+        assert_eq!(producer.push(40), Ok(())); // Wrap around the sentinel.
+        assert_eq!(consumer.pop(), Some(20));
+        assert_eq!(consumer.pop(), Some(40));
+        assert_eq!(consumer.pop(), None);
+        assert!(consumer.is_empty());
+        assert_eq!(producer.dropped_count(), 1);
     }
 
     #[test]
@@ -1336,25 +1493,98 @@ mod tests {
 
     #[test]
     fn stream_handles_one_producer_and_one_consumer() {
-        let stream = Arc::new(SpscStream::new(32).unwrap());
-        let producer_stream = Arc::clone(&stream);
-        let producer = thread::spawn(move || {
-            for value in 0..10_000_u64 {
-                while producer_stream.push(value).is_err() {
+        // A value need only be Send, not Sync: slots are transferred between
+        // the two exclusive endpoints rather than shared as `&T`.
+        #[derive(Clone, Copy, Debug)]
+        struct Sample {
+            sequence: u64,
+            inverse: u64,
+            not_sync: std::marker::PhantomData<std::cell::Cell<()>>,
+        }
+
+        for capacity in [1, 2, 17, 32] {
+            let (mut producer, mut consumer) = SpscStream::new(capacity).unwrap().split();
+            let writer = thread::spawn(move || {
+                for sequence in 0..20_000_u64 {
+                    let sample = Sample {
+                        sequence,
+                        inverse: !sequence,
+                        not_sync: std::marker::PhantomData,
+                    };
+                    while producer.push(sample).is_err() {
+                        thread::yield_now();
+                    }
+                }
+            });
+            let mut next = 0;
+            while next < 20_000 {
+                if let Some(sample) = consumer.pop() {
+                    assert_eq!(sample.sequence, next);
+                    assert_eq!(sample.inverse, !next);
+                    next += 1;
+                } else {
                     thread::yield_now();
                 }
             }
-        });
-        let mut next = 0;
-        while next < 10_000 {
-            if let Some(value) = stream.pop() {
-                assert_eq!(value, next);
-                next += 1;
+            writer.join().unwrap();
+            assert!(consumer.is_empty());
+        }
+    }
+
+    #[test]
+    fn stream_endpoints_can_be_handed_off_with_external_synchronization() {
+        const PRODUCERS: usize = 4;
+        const PER_PRODUCER: usize = 1_000;
+        let (producer, mut consumer) = SpscStream::new(7).unwrap().split();
+        let producer = Arc::new(Mutex::new(producer));
+        let mut writers = Vec::new();
+        for id in 0..PRODUCERS {
+            let producer = Arc::clone(&producer);
+            writers.push(thread::spawn(move || {
+                for index in 0..PER_PRODUCER {
+                    let value = id * PER_PRODUCER + index;
+                    loop {
+                        if producer.lock().unwrap().push(value).is_ok() {
+                            break;
+                        }
+                        thread::yield_now();
+                    }
+                }
+            }));
+        }
+        let mut seen = vec![false; PRODUCERS * PER_PRODUCER];
+        let mut received = 0;
+        while received < seen.len() {
+            if let Some(value) = consumer.pop() {
+                assert!(!seen[value], "received duplicate value {value}");
+                seen[value] = true;
+                received += 1;
             } else {
                 thread::yield_now();
             }
         }
-        producer.join().unwrap();
+        for writer in writers {
+            writer.join().unwrap();
+        }
+        assert!(seen.into_iter().all(|value| value));
+        assert!(consumer.is_empty());
+    }
+
+    #[test]
+    fn stream_storage_outlives_either_endpoint() {
+        let (mut producer, mut consumer) = SpscStream::new(2).unwrap().split();
+        producer.push(1).unwrap();
+        producer.push(2).unwrap();
+        drop(producer);
+        assert_eq!(consumer.pop(), Some(1));
+        assert_eq!(consumer.pop(), Some(2));
+        assert_eq!(consumer.pop(), None);
+
+        let (mut producer, consumer) = SpscStream::new(1).unwrap().split();
+        drop(consumer);
+        assert_eq!(producer.push(1), Ok(()));
+        assert_eq!(producer.push(2), Err(StreamError::Full));
+        assert_eq!(producer.dropped_count(), 1);
     }
 
     #[test]
