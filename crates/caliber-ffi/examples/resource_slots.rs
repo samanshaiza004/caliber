@@ -126,7 +126,9 @@ fn median(samples: &[Sample], field: impl Fn(&Sample) -> Duration) -> f64 {
 fn main() {
     let args: Vec<_> = std::env::args().skip(1).collect();
     let check_scaling = args.iter().any(|arg| arg == "--check-scaling");
-    let tile_bytes = if args.iter().any(|arg| arg == "--tiny") {
+    // Use a tiny payload for the scaling gate so the comparison measures slot
+    // bookkeeping rather than bandwidth and allocator size-class effects.
+    let tile_bytes = if check_scaling || args.iter().any(|arg| arg == "--tiny") {
         1
     } else {
         1_024

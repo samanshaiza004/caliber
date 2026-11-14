@@ -790,10 +790,12 @@ impl LatestTelemetry {
                     })?;
                 candidate.resize(self.width, 0);
             }
-            for (_index, (word, slot)) in candidate.iter_mut().zip(&self.bytes).enumerate() {
+            for (index, (word, slot)) in candidate.iter_mut().zip(&self.bytes).enumerate() {
                 *word = slot.load(Ordering::Relaxed);
                 #[cfg(test)]
-                after_word(_index);
+                after_word(index);
+                #[cfg(not(test))]
+                let _ = index;
             }
             // The initial acquire sees the words of the completed revision.
             // If a word instead came from a later write, this fence pairs

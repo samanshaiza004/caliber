@@ -1858,11 +1858,9 @@ mod tests {
                     writer_finished.store(true, Ordering::Release);
                     return Err(status);
                 }
-                if value == 2 {
-                    if published.send(()).is_err() || wait_for_reader.recv().is_err() {
-                        writer_finished.store(true, Ordering::Release);
-                        return Ok(());
-                    }
+                if value == 2 && (published.send(()).is_err() || wait_for_reader.recv().is_err()) {
+                    writer_finished.store(true, Ordering::Release);
+                    return Ok(());
                 }
             }
             writer_finished.store(true, Ordering::Release);
