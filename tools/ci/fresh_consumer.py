@@ -17,9 +17,9 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 FIXTURE_ROOT = REPO_ROOT / "examples" / "fresh-consumer"
 
 
-def run(command: list[str], cwd: Path) -> None:
+def run(command: list[str], cwd: Path, env: dict[str, str] | None = None) -> None:
     print("+", " ".join(command), flush=True)
-    subprocess.run(command, cwd=cwd, check=True)
+    subprocess.run(command, cwd=cwd, env=env, check=True)
 
 
 def library_path(target_root: Path) -> Path:
@@ -124,6 +124,12 @@ def main() -> None:
                 f"resolved {actual_revision}, expected pinned {pinned_revision}"
             )
 
+        # This fixture intentionally builds the pinned v0.1 consumer revision.
+        # Do not apply this repository's warnings-as-errors policy to that
+        # released dependency; newer Rust toolchains may deprecate APIs it uses.
+        consumer_build_env = os.environ.copy()
+        consumer_build_env.pop("RUSTFLAGS", None)
+        consumer_build_env.pop("CARGO_ENCODED_RUSTFLAGS", None)
         run(
             [
                 cargo_exe,
@@ -136,6 +142,7 @@ def main() -> None:
                 str(target_root),
             ],
             consumer_root,
+            env=consumer_build_env,
         )
 
         run(

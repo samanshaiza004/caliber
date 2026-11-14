@@ -1,6 +1,6 @@
 use std::ffi::{CString, c_char, c_int};
 use std::mem::{offset_of, size_of};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use caliber_ffi::{
     CaliberApiV1, CaliberContextConfig, CaliberResourceView, CaliberStatePublication,
@@ -107,7 +107,7 @@ fn run_client(client: unsafe extern "C" fn(*const c_char) -> c_int, label: &str)
     let path = caliber_library_path();
     assert!(
         path.is_file(),
-        "Caliber cdylib missing at {}; cargo test should build it beside the test executable unless CALIBER_FFI_PATH overrides it",
+        "Caliber cdylib missing at {}; set CALIBER_FFI_PATH to test an explicit library",
         path.display()
     );
     let c_path = CString::new(path.to_string_lossy().as_bytes()).expect("library path has no NUL");
@@ -126,13 +126,58 @@ fn caliber_library_path() -> PathBuf {
     if let Some(path) = std::env::var_os("CALIBER_FFI_PATH") {
         return PathBuf::from(path);
     }
-    // Cargo builds the dependency cdylib beside this integration test, even
-    // when the target directory, target triple, or profile is customized.
     let executable = std::env::current_exe().expect("test executable path");
-    let deps_dir = executable.parent().expect("test executable directory");
-    deps_dir.join(format!(
+    caliber_library_path_from_executable(&executable)
+}
+
+fn caliber_library_path_from_executable(executable: &Path) -> PathBuf {
+    let filename = format!(
         "{}caliber_ffi{}",
         std::env::consts::DLL_PREFIX,
         std::env::consts::DLL_SUFFIX
-    ))
+    );
+    let adjacent = executable
+        .parent()
+        .expect("test executable directory")
+        .join(&filename);
+    if adjacent.is_file() {
+        return adjacent;
+    }
+
+    // Cargo 1.100 may run test binaries from a build-script OUT_DIR. Search
+    // their ancestors for the profile's deps directory, where the cdylib lives.
+    executable
+        .ancestors()
+        .map(|ancestor| ancestor.join("deps").join(&filename))
+        .find(|candidate| candidate.is_file())
+        .unwrap_or(adjacent)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::caliber_library_path_from_executable;
+    use std::fs;
+
+    #[test]
+    fn finds_cdylib_from_cargo_build_script_out_dir() {
+        let root =
+            std::env::temp_dir().join(format!("caliber-abi-path-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+
+        let executable = root.join("debug/build/caliber-abi-tests/hash/out/abi_compat");
+        let deps = root.join("debug/deps");
+        fs::create_dir_all(executable.parent().unwrap()).unwrap();
+        fs::create_dir_all(&deps).unwrap();
+
+        let library = deps.join(format!(
+            "{}caliber_ffi{}",
+            std::env::consts::DLL_PREFIX,
+            std::env::consts::DLL_SUFFIX
+        ));
+        fs::write(&library, b"test library marker").unwrap();
+
+        assert_eq!(caliber_library_path_from_executable(&executable), library);
+
+        fs::remove_dir_all(root).unwrap();
+    }
 }

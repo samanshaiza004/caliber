@@ -1260,21 +1260,27 @@ mod tests {
     #[test]
     fn exhausted_state_revision_preserves_last_publication() {
         let publisher = StatePublisher::new(64).unwrap();
-        assert_eq!(publisher.publish(1, b"first"), Ok(1));
-        let previous = publisher.read().unwrap();
-
-        // Simulate a publisher that has consumed the full revision space.
+        // Seed the reachable terminal state without performing 2^64 publishes.
+        let previous = Arc::new(StatePublication {
+            revision: u64::MAX,
+            schema: 1,
+            payload: Arc::from(&b"last publication"[..]),
+        });
+        *publisher
+            .current
+            .write()
+            .unwrap_or_else(|poison| poison.into_inner()) = Some(Arc::clone(&previous));
         publisher
             .published_revision
             .store(u64::MAX, Ordering::Release);
 
+        assert_eq!(publisher.latest_revision(), Some(u64::MAX));
         assert_eq!(
             publisher.publish(1, b"replacement"),
             Err(Error::RevisionExhausted)
         );
         let current = publisher.read().unwrap();
-        assert_eq!(current.revision(), previous.revision());
-        assert_eq!(current.payload(), previous.payload());
+        assert!(Arc::ptr_eq(&current, &previous));
     }
 
     #[test]
@@ -1300,6 +1306,45 @@ mod tests {
             publisher.read().unwrap().payload(),
             &2_000_u64.to_le_bytes()
         );
+    }
+
+    #[test]
+    fn concurrent_state_publishers_assign_unique_increasing_revisions() {
+        const WRITERS: usize = 4;
+        const PUBLISHES_PER_WRITER: u64 = 128;
+
+        let publisher = Arc::new(StatePublisher::new(8).unwrap());
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let mut writers = Vec::new();
+        for writer_id in 0..WRITERS {
+            let publisher = Arc::clone(&publisher);
+            let sender = sender.clone();
+            writers.push(thread::spawn(move || {
+                for sequence in 0..PUBLISHES_PER_WRITER {
+                    let value = writer_id as u64 * PUBLISHES_PER_WRITER + sequence + 1;
+                    let revision = publisher.publish(1, &value.to_le_bytes()).unwrap();
+                    sender.send((revision, value)).unwrap();
+                }
+            }));
+        }
+        drop(sender);
+
+        let mut publications: Vec<_> = receiver.iter().collect();
+        for writer in writers {
+            writer.join().unwrap();
+        }
+        publications.sort_unstable_by_key(|(revision, _)| *revision);
+
+        let total = (WRITERS as u64) * PUBLISHES_PER_WRITER;
+        assert_eq!(publications.len(), total as usize);
+        for (index, (revision, _)) in publications.iter().enumerate() {
+            assert_eq!(*revision, index as u64 + 1);
+        }
+
+        let (latest_revision, latest_value) = publications.last().unwrap();
+        let latest = publisher.read().unwrap();
+        assert_eq!(latest.revision(), *latest_revision);
+        assert_eq!(latest.payload(), &latest_value.to_le_bytes());
     }
 
     #[test]
