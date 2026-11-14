@@ -451,12 +451,19 @@ struct ResourceSlot {
 /// Releasing a handle removes the registry's owning reference but does not
 /// invalidate already-issued [`ResourceView`] values. New lookups using the
 /// released handle fail, while views keep their immutable bytes alive until
-/// their last owner drops them.
+/// their last owner drops them. Insert and release use a free-id stack, so
+/// reusing a slot does not scan the live registry.
 pub struct ResourceRegistry {
-    slots: Mutex<HashMap<u64, ResourceSlot>>,
-    next_id: AtomicU64,
+    slots: Mutex<ResourceRegistrySlots>,
     max_resources: usize,
     max_resource_bytes: usize,
+}
+
+struct ResourceRegistrySlots {
+    entries: HashMap<u64, ResourceSlot>,
+    free_ids: Vec<u64>,
+    next_id: u64,
+    live_count: usize,
 }
 
 impl fmt::Debug for ResourceRegistry {
@@ -483,8 +490,12 @@ impl ResourceRegistry {
             });
         }
         Ok(Self {
-            slots: Mutex::new(HashMap::new()),
-            next_id: AtomicU64::new(1),
+            slots: Mutex::new(ResourceRegistrySlots {
+                entries: HashMap::new(),
+                free_ids: Vec::new(),
+                next_id: 1,
+                live_count: 0,
+            }),
             max_resources,
             max_resource_bytes,
         })
@@ -509,37 +520,41 @@ impl ResourceRegistry {
             .slots
             .lock()
             .unwrap_or_else(|poison| poison.into_inner());
-        if slots.values().filter(|slot| slot.bytes.is_some()).count() == self.max_resources {
+        if slots.live_count == self.max_resources {
             return Err(Error::Full {
                 kind: "resource registry",
             });
         }
         let bytes = Arc::from(bytes);
-        if let Some((&id, slot)) = slots.iter_mut().find(|(_, slot)| slot.bytes.is_none()) {
+        if let Some(&id) = slots.free_ids.last() {
+            let slot = slots.entries.get_mut(&id).expect("free resource id exists");
+            debug_assert!(slot.bytes.is_none());
+            slot.bytes = Some(bytes);
             let handle = ResourceHandle {
                 id,
                 generation: slot.generation,
             };
-            slot.bytes = Some(bytes);
+            slots.free_ids.pop();
+            slots.live_count += 1;
             return Ok(handle);
         }
-        slots.try_reserve(1).map_err(|_| Error::AllocationFailed {
-            kind: "resource registry",
-        })?;
-        let id = self
-            .next_id
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
-                current.checked_add(1)
-            })
-            .map_err(|_| Error::RevisionExhausted)?;
+        slots
+            .entries
+            .try_reserve(1)
+            .map_err(|_| Error::AllocationFailed {
+                kind: "resource registry",
+            })?;
+        let id = slots.next_id;
+        slots.next_id = id.checked_add(1).ok_or(Error::RevisionExhausted)?;
         let handle = ResourceHandle { id, generation: 1 };
-        slots.insert(
+        slots.entries.insert(
             id,
             ResourceSlot {
                 generation: 1,
                 bytes: Some(bytes),
             },
         );
+        slots.live_count += 1;
         Ok(handle)
     }
 
@@ -549,7 +564,7 @@ impl ResourceRegistry {
             .slots
             .lock()
             .unwrap_or_else(|poison| poison.into_inner());
-        let Some(slot) = slots.get(&handle.id) else {
+        let Some(slot) = slots.entries.get(&handle.id) else {
             return Err(Error::UnknownResource(handle));
         };
         if slot.generation != handle.generation {
@@ -570,17 +585,30 @@ impl ResourceRegistry {
             .slots
             .lock()
             .unwrap_or_else(|poison| poison.into_inner());
-        let Some(slot) = slots.get_mut(&handle.id) else {
+        let Some(slot) = slots.entries.get(&handle.id) else {
             return Err(Error::UnknownResource(handle));
         };
         if slot.generation != handle.generation || slot.bytes.is_none() {
             return Err(Error::StaleResource(handle));
         }
-        slot.bytes = None;
-        slot.generation = slot
+        let generation = slot
             .generation
             .checked_add(1)
             .ok_or(Error::RevisionExhausted)?;
+        slots
+            .free_ids
+            .try_reserve(1)
+            .map_err(|_| Error::AllocationFailed {
+                kind: "resource free list",
+            })?;
+        let slot = slots
+            .entries
+            .get_mut(&handle.id)
+            .expect("validated resource slot exists");
+        slot.bytes = None;
+        slot.generation = generation;
+        slots.free_ids.push(handle.id);
+        slots.live_count -= 1;
         Ok(())
     }
 
@@ -600,7 +628,7 @@ impl ResourceRegistry {
             .slots
             .lock()
             .unwrap_or_else(|poison| poison.into_inner());
-        let Some(slot) = slots.get_mut(&handle.id) else {
+        let Some(slot) = slots.entries.get_mut(&handle.id) else {
             return Err(Error::UnknownResource(handle));
         };
         if slot.generation != handle.generation || slot.bytes.is_none() {
@@ -623,9 +651,7 @@ impl ResourceRegistry {
         self.slots
             .lock()
             .unwrap_or_else(|poison| poison.into_inner())
-            .values()
-            .filter(|slot| slot.bytes.is_some())
-            .count()
+            .live_count
     }
 
     /// Returns whether no registry-owned resources are live.
@@ -968,6 +994,11 @@ impl WakeSignal {
 
     /// Marks the signal pending and wakes one waiter.
     pub fn notify(&self) {
+        let _guard = self
+            .inner
+            .wait_lock
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
         self.inner.pending.store(true, Ordering::Release);
         self.inner.wait_cv.notify_one();
     }
@@ -1120,6 +1151,34 @@ mod tests {
         assert_eq!(reused.id, replacement.id);
         assert!(reused.generation > replacement.generation);
         assert_eq!(registry.get(reused).unwrap().bytes(), b"reused");
+    }
+
+    #[test]
+    fn resource_registry_reuses_many_slots_and_keeps_live_count_exact() {
+        let registry = ResourceRegistry::new(256, 8).unwrap();
+        let first: Vec<_> = (0..256)
+            .map(|_| registry.insert(b"tile").unwrap())
+            .collect();
+        assert_eq!(registry.len(), 256);
+        assert!(matches!(registry.insert(b"extra"), Err(Error::Full { .. })));
+        for handle in first.iter().step_by(2) {
+            registry.release(*handle).unwrap();
+        }
+        assert_eq!(registry.len(), 128);
+
+        let reused: Vec<_> = (0..128)
+            .map(|_| registry.insert(b"next").unwrap())
+            .collect();
+        assert_eq!(registry.len(), 256);
+        assert!(reused.iter().all(|new| {
+            first
+                .iter()
+                .any(|old| old.id == new.id && old.generation < new.generation)
+        }));
+        for handle in reused {
+            registry.release(handle).unwrap();
+        }
+        assert_eq!(registry.len(), 128);
     }
 
     #[test]
@@ -1309,6 +1368,25 @@ mod tests {
         assert!(signal.wait_timeout(Duration::from_millis(1)));
         assert!(signal.try_take());
         assert!(!signal.try_take());
+    }
+
+    #[test]
+    fn wake_signal_notification_racing_with_wait_is_not_lost() {
+        for _ in 0..256 {
+            let signal = WakeSignal::new();
+            let waiting = Arc::new(AtomicBool::new(false));
+            let waiter_signal = signal.clone();
+            let waiter_waiting = Arc::clone(&waiting);
+            let waiter = thread::spawn(move || {
+                waiter_waiting.store(true, Ordering::Release);
+                waiter_signal.wait_timeout(Duration::from_millis(100))
+            });
+            while !waiting.load(Ordering::Acquire) {
+                thread::yield_now();
+            }
+            signal.notify();
+            assert!(waiter.join().unwrap(), "notification was lost");
+        }
     }
 
     #[test]

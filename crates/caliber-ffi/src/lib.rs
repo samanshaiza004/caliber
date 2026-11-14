@@ -324,6 +324,7 @@ struct ResourceSlot {
 /// generation instead of growing the map forever.
 struct ResourceSlots {
     entries: HashMap<u64, ResourceSlot>,
+    free_ids: Vec<u64>,
     max_entries: usize,
     next_id: u64,
 }
@@ -334,15 +335,21 @@ impl ResourceSlots {
         entries
             .try_reserve(max_entries)
             .map_err(|_| CaliberStatus::Internal)?;
+        let mut free_ids = Vec::new();
+        free_ids
+            .try_reserve_exact(max_entries)
+            .map_err(|_| CaliberStatus::Internal)?;
         Ok(Self {
             entries,
+            free_ids,
             max_entries,
             next_id: 1,
         })
     }
 
     fn reserve_slot(&mut self) -> Result<(u64, u64), CaliberStatus> {
-        if let Some((&id, slot)) = self.entries.iter_mut().find(|(_, slot)| !slot.live) {
+        if let Some(&id) = self.free_ids.last() {
+            let slot = self.entries.get(&id).ok_or(CaliberStatus::Internal)?;
             let generation = slot
                 .generation
                 .checked_add(1)
@@ -353,8 +360,32 @@ impl ResourceSlots {
             return Err(CaliberStatus::QueueFull);
         }
         let id = self.next_id;
-        self.next_id = self.next_id.checked_add(1).ok_or(CaliberStatus::Internal)?;
+        id.checked_add(1).ok_or(CaliberStatus::Internal)?;
         Ok((id, 1))
+    }
+
+    fn commit_slot(&mut self, id: u64, generation: u64, handle: ResourceHandle) {
+        if let Some(slot) = self.entries.get_mut(&id) {
+            debug_assert_eq!(self.free_ids.last(), Some(&id));
+            debug_assert!(!slot.live);
+            self.free_ids.pop();
+            *slot = ResourceSlot {
+                handle,
+                generation,
+                live: true,
+            };
+        } else {
+            debug_assert_eq!(id, self.next_id);
+            self.next_id = id + 1; // checked in reserve_slot while locked
+            self.entries.insert(
+                id,
+                ResourceSlot {
+                    handle,
+                    generation,
+                    live: true,
+                },
+            );
+        }
     }
 }
 
@@ -570,14 +601,7 @@ impl CaliberContext {
             .map_err(|_| CaliberStatus::Internal)?;
         let (resource_id, generation) = slots.reserve_slot()?;
         let handle = self.inner.resources.insert(bytes).map_err(map_core_error)?;
-        slots.entries.insert(
-            resource_id,
-            ResourceSlot {
-                handle,
-                generation,
-                live: true,
-            },
-        );
+        slots.commit_slot(resource_id, generation, handle);
         self.bump_wake();
         Ok((resource_id, generation))
     }
@@ -602,6 +626,7 @@ impl CaliberContext {
                 if let Some(slot) = slots.entries.get_mut(&resource_id) {
                     slot.live = false;
                 }
+                slots.free_ids.push(resource_id);
                 self.bump_wake();
                 CaliberStatus::Ok
             }
