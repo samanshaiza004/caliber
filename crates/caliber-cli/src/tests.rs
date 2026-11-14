@@ -1,7 +1,8 @@
 #[cfg(windows)]
 use super::hook_path;
 use super::{
-    Dependency, LockFile, SyncState, pin_project, status_project, sync_project, update_project,
+    Dependency, LockFile, SyncState, pin_project, same_repository, status_project, sync_project,
+    update_project,
 };
 use std::collections::BTreeMap;
 use std::fs;
@@ -11,6 +12,22 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 static NEXT_TEMP: AtomicU64 = AtomicU64::new(0);
+
+#[test]
+fn repository_comparison_normalizes_ssh_and_https_remotes() {
+    assert!(same_repository(
+        "git@github.com:owner/project.git",
+        "https://github.com/owner/project"
+    ));
+    assert!(same_repository(
+        "ssh://git@github.com/owner/project.git",
+        "https://github.com/owner/project"
+    ));
+    assert!(!same_repository(
+        "git@github.com:owner/project.git",
+        "https://github.com/other/project"
+    ));
+}
 
 #[cfg(windows)]
 #[test]

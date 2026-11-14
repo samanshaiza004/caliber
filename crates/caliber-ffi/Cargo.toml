@@ -2,6 +2,7 @@
 name = "caliber-ffi"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 publish = false
 description = "Experimental C-compatible boundary for the Caliber application contract"

@@ -8,7 +8,7 @@ payloads remain the application's own schema.
 ## Prerequisites
 
 - Git
-- Rust stable with Cargo (Rust 1.85 or newer for edition 2024)
+- Rust 1.85 or newer with Cargo (the workspace declares and CI checks this MSRV)
 - A C compiler supported by the Rust target
 - Python 3 for the optional `ctypes` example
 

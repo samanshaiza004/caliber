@@ -1080,10 +1080,10 @@ fn same_repository(left: &str, right: &str) -> bool {
         let mut value = value.trim().to_owned();
         if let Some(rest) = value.strip_prefix("ssh://git@") {
             value = format!("https://{rest}");
-        } else if let Some(rest) = value.strip_prefix("git@")
-            && let Some((host, path)) = rest.split_once(':')
-        {
-            value = format!("https://{host}/{path}");
+        } else if let Some(rest) = value.strip_prefix("git@") {
+            if let Some((host, path)) = rest.split_once(':') {
+                value = format!("https://{host}/{path}");
+            }
         }
         while value.ends_with('/') {
             value.pop();

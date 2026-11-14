@@ -1,8 +1,7 @@
 use caliber_ffi::{
-    CALIBER_ABI_VERSION_1, CaliberApiV1, CaliberContext, CaliberContextConfig, CaliberStatus,
-    caliber_get_api,
+    CALIBER_ABI_VERSION_1, CaliberContext, CaliberContextConfig, CaliberStatus, caliber_get_api,
 };
-use std::ffi::c_int;
+use std::ffi::{c_int, c_void};
 use std::ptr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Barrier};
@@ -10,8 +9,11 @@ use std::thread;
 
 #[link(name = "caliber_abi_clients", kind = "static")]
 unsafe extern "C" {
-    fn caliber_command_capacity_client_run(api: *const CaliberApiV1) -> c_int;
-    fn caliber_command_fifo_client_run(api: *const CaliberApiV1) -> c_int;
+    // Keep the Rust declaration opaque: the C consumer knows this address is
+    // a Caliber_Api_V1 table, while Rust's FFI lint recursively inspects the
+    // table's private context implementation.
+    fn caliber_command_capacity_client_run(api: *const c_void) -> c_int;
+    fn caliber_command_fifo_client_run(api: *const c_void) -> c_int;
 }
 
 #[test]
@@ -19,7 +21,7 @@ fn c_client_fifo_and_null_pointer_contracts() {
     let api = caliber_get_api(CALIBER_ABI_VERSION_1);
     assert!(!api.is_null());
     // SAFETY: the API is Caliber's static v1 table; the C client owns its context.
-    let result = unsafe { caliber_command_fifo_client_run(api) };
+    let result = unsafe { caliber_command_fifo_client_run(api.cast()) };
     assert_eq!(
         result, 0,
         "C queue client failed at command_queue.c:{result}"
@@ -270,7 +272,7 @@ fn c_client_capacity_one_counts_peeked_and_short_commands() {
     let api = caliber_get_api(CALIBER_ABI_VERSION_1);
     assert!(!api.is_null());
     // SAFETY: the API is Caliber's static v1 table; the C client owns its context.
-    let result = unsafe { caliber_command_capacity_client_run(api) };
+    let result = unsafe { caliber_command_capacity_client_run(api.cast()) };
     assert_eq!(
         result, 0,
         "C queue client failed at command_queue.c:{result}"
