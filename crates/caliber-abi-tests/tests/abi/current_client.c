@@ -51,17 +51,31 @@ int caliber_current_v1_client_run(const char *library_path) {
 
     CaliberContextConfig config = {0};
     config.struct_size = (uint32_t)sizeof(config);
-    config.telemetry_width = 1;
+    config.telemetry_width = 2;
     CaliberStatus status = api->context_create(&config, &context);
     if (status != CALIBER_STATUS_OK || context == NULL) { result = 6; goto done; }
-    const size_t telemetry_in[] = {(size_t)0x12345};
-    size_t telemetry_out[] = {0};
-    CaliberTelemetryInfo telemetry_info = {0};
-    if (api->context_publish_telemetry(context, telemetry_in, 1) != CALIBER_STATUS_OK) { result = 12; goto done; }
-    if (api->context_read_latest_telemetry(context, telemetry_out, 1, &telemetry_info) != CALIBER_STATUS_OK ||
-        telemetry_out[0] != telemetry_in[0] || telemetry_info.sequence != 1 || telemetry_info.schema != 0 ||
-        telemetry_info.reserved != 0 || telemetry_info.value_count != 1 ||
+    const size_t telemetry_in[] = {(size_t)0x12345, (size_t)0x54321};
+    size_t telemetry_out[] = {91, 92, 93};
+    CaliberTelemetryInfo telemetry_info = {11, 22, 33, 44, 55};
+    if (api->context_read_latest_telemetry(context, telemetry_out, 3, &telemetry_info) != CALIBER_STATUS_UNAVAILABLE ||
+        telemetry_out[0] != 91 || telemetry_out[1] != 92 || telemetry_out[2] != 93 ||
+        telemetry_info.sequence != 11 || telemetry_info.schema != 22 || telemetry_info.reserved != 33 ||
+        telemetry_info.value_count != 44 || telemetry_info.value_size != 55) { result = 14; goto done; }
+    if (api->context_publish_telemetry(context, telemetry_in, 2) != CALIBER_STATUS_OK) { result = 12; goto done; }
+    if (api->context_read_latest_telemetry(context, telemetry_out, 1, &telemetry_info) != CALIBER_STATUS_BUFFER_TOO_SMALL ||
+        telemetry_out[0] != 91 || telemetry_out[1] != 92 || telemetry_out[2] != 93 ||
+        telemetry_info.sequence != 1 || telemetry_info.value_count != 2 ||
+        telemetry_info.value_size != sizeof(size_t)) { result = 15; goto done; }
+    if (api->context_read_latest_telemetry(context, telemetry_out, 2, &telemetry_info) != CALIBER_STATUS_OK ||
+        telemetry_out[0] != telemetry_in[0] || telemetry_out[1] != telemetry_in[1] || telemetry_out[2] != 93 ||
+        telemetry_info.sequence != 1 || telemetry_info.schema != 0 ||
+        telemetry_info.reserved != 0 || telemetry_info.value_count != 2 ||
         telemetry_info.value_size != sizeof(size_t)) { result = 13; goto done; }
+    telemetry_out[0] = 91; telemetry_out[1] = 92;
+    if (api->context_read_latest_telemetry(context, telemetry_out, 3, &telemetry_info) != CALIBER_STATUS_OK ||
+        telemetry_out[0] != telemetry_in[0] || telemetry_out[1] != telemetry_in[1] || telemetry_out[2] != 93 ||
+        telemetry_info.sequence != 1 || telemetry_info.value_count != 2 ||
+        telemetry_info.value_size != sizeof(size_t)) { result = 16; goto done; }
     uint64_t before = 0, after = 0;
     if (api->context_wake_sequence(context, &before) != CALIBER_STATUS_OK) { result = 7; goto done; }
     const uint8_t command[] = {'n', 'e', 'w'};

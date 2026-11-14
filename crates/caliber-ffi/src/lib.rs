@@ -455,10 +455,11 @@ impl CaliberContext {
     }
 
     fn read_telemetry(&self, out: &mut [usize]) -> Result<CaliberTelemetryInfo, CaliberStatus> {
-        if out.len() != self.inner.limits.telemetry_width {
+        let width = self.inner.limits.telemetry_width;
+        if out.len() < width {
             return Err(CaliberStatus::BufferTooSmall);
         }
-        let sequence = match self.inner.telemetry.read_into(out) {
+        let sequence = match self.inner.telemetry.read_into(&mut out[..width]) {
             Ok(sequence) => sequence,
             Err(CoreError::NoTelemetry) => return Err(CaliberStatus::Unavailable),
             Err(error) => return Err(map_core_error(error)),
@@ -467,7 +468,7 @@ impl CaliberContext {
             sequence,
             schema: 0,
             reserved: 0,
-            value_count: out.len(),
+            value_count: width,
             value_size: std::mem::size_of::<usize>(),
         })
     }
@@ -1176,9 +1177,13 @@ pub unsafe extern "C" fn caliber_context_publish_telemetry(
     .unwrap_or(CaliberStatus::Internal)
 }
 
-/// Copy the latest telemetry payload into `out`.  `info` is always populated
-/// when a telemetry value exists, including on `BufferTooSmall`, so callers can
-/// resize once and retry.  A null output is valid only with a zero capacity.
+/// Copy the latest telemetry payload into `out`. A capacity at least as large
+/// as the configured width is sufficient; extra words are left unchanged.
+/// Failed reads leave all payload words untouched. On success, `info` describes
+/// the copied sample; on `BufferTooSmall` it reports the required width and a
+/// recently observed sequence. Other errors leave `info` unchanged. A null
+/// output is valid only with a zero capacity. Reads may allocate temporary
+/// storage and are not suitable for hard realtime callbacks.
 ///
 /// # Safety
 /// `context` must be a live handle, `info` must point to writable storage, and
@@ -1207,10 +1212,7 @@ pub unsafe extern "C" fn caliber_context_read_latest_telemetry(
             Ok(info) => info,
             Err(status) => return status,
         };
-        if out.len() != telemetry_info.value_count {
-            // Keep the latest-value API fixed-width, as required by the core
-            // telemetry slot.  The caller can inspect the configured width in
-            // its own context setup before allocating this buffer.
+        if out.len() < telemetry_info.value_count {
             // SAFETY: info was checked non-null and is caller-owned output.
             unsafe { *info = telemetry_info };
             return CaliberStatus::BufferTooSmall;
@@ -1745,6 +1747,156 @@ mod tests {
         assert_eq!(info.reserved, 0);
         assert_eq!(info.value_count, 8);
         assert_eq!(info.value_size, size_of::<usize>());
+    }
+
+    #[test]
+    fn telemetry_accepts_oversized_output_and_preserves_suffix() {
+        let context = context();
+        let sample = [44, 8, 7, 6, 5, 4, 3, 2];
+        assert_eq!(context.publish_telemetry(&sample), CaliberStatus::Ok);
+        let mut output = [0xfeed_usize; 10];
+        let mut info = CaliberTelemetryInfo::default();
+
+        // SAFETY: the context is live and both outputs are writable.
+        let status = unsafe {
+            caliber_context_read_latest_telemetry(
+                &*context,
+                output.as_mut_ptr(),
+                output.len(),
+                &mut info,
+            )
+        };
+        assert_eq!(status, CaliberStatus::Ok);
+        assert_eq!(&output[..8], &sample);
+        assert_eq!(&output[8..], &[0xfeed, 0xfeed]);
+        assert_eq!(info.sequence, 1);
+        assert_eq!(info.value_count, sample.len());
+        assert_eq!(info.value_size, size_of::<usize>());
+    }
+
+    #[test]
+    fn telemetry_unavailable_preserves_output_and_metadata() {
+        let context = context();
+        let mut output = [0xfeed_usize; 10];
+        let mut info = CaliberTelemetryInfo {
+            sequence: 11,
+            schema: 22,
+            reserved: 33,
+            value_count: 44,
+            value_size: 55,
+        };
+
+        // SAFETY: the context is live and both outputs are writable.
+        let status = unsafe {
+            caliber_context_read_latest_telemetry(
+                &*context,
+                output.as_mut_ptr(),
+                output.len(),
+                &mut info,
+            )
+        };
+        assert_eq!(status, CaliberStatus::Unavailable);
+        assert_eq!(output, [0xfeed; 10]);
+        assert_eq!(info.sequence, 11);
+        assert_eq!(info.schema, 22);
+        assert_eq!(info.reserved, 33);
+        assert_eq!(info.value_count, 44);
+        assert_eq!(info.value_size, 55);
+    }
+
+    #[test]
+    fn telemetry_concurrent_abi_reads_are_coherent() {
+        fn sample(value: usize) -> [usize; 8] {
+            [value, !value, value, !value, value, !value, value, !value]
+        }
+
+        let context: Arc<CaliberContext> = Arc::from(context());
+        assert_eq!(context.publish_telemetry(&sample(1)), CaliberStatus::Ok);
+        let writer_context = Arc::clone(&context);
+        let finished = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let writer_finished = Arc::clone(&finished);
+        let (published, wait_for_writer) = std::sync::mpsc::sync_channel(0);
+        let (resume, wait_for_reader) = std::sync::mpsc::sync_channel(0);
+        let last = if cfg!(debug_assertions) {
+            100_000
+        } else {
+            5_000_000
+        };
+        let writer = std::thread::spawn(move || {
+            for value in 2..=last {
+                let words = sample(value);
+                // SAFETY: the Arc keeps the context and sample alive for the call.
+                let status = unsafe {
+                    caliber_context_publish_telemetry(&*writer_context, words.as_ptr(), words.len())
+                };
+                if status != CaliberStatus::Ok {
+                    writer_finished.store(true, Ordering::Release);
+                    return Err(status);
+                }
+                if value == 2 {
+                    if published.send(()).is_err() || wait_for_reader.recv().is_err() {
+                        writer_finished.store(true, Ordering::Release);
+                        return Ok(());
+                    }
+                }
+            }
+            writer_finished.store(true, Ordering::Release);
+            Ok(())
+        });
+
+        wait_for_writer.recv().unwrap();
+        let mut first_read = true;
+        let mut successes = 0;
+        while !finished.load(Ordering::Acquire) {
+            let mut output = [0xfeed_usize; 10];
+            let mut info = CaliberTelemetryInfo {
+                sequence: 11,
+                schema: 22,
+                reserved: 33,
+                value_count: 44,
+                value_size: 55,
+            };
+            // SAFETY: the Arc keeps the context alive and both outputs are writable.
+            let status = unsafe {
+                caliber_context_read_latest_telemetry(
+                    &*context,
+                    output.as_mut_ptr(),
+                    output.len(),
+                    &mut info,
+                )
+            };
+            if first_read {
+                resume.send(()).unwrap();
+                first_read = false;
+            }
+            match status {
+                CaliberStatus::Ok => {
+                    successes += 1;
+                    assert_eq!(&output[..8], &sample(output[0]));
+                    assert_eq!(&output[8..], &[0xfeed, 0xfeed]);
+                    assert_eq!(info.sequence, output[0] as u64);
+                    assert_eq!((info.schema, info.reserved), (0, 0));
+                    assert_eq!(info.value_count, 8);
+                    assert_eq!(info.value_size, size_of::<usize>());
+                }
+                CaliberStatus::QueueFull => {
+                    assert_eq!(output, [0xfeed; 10]);
+                    assert_eq!(
+                        (
+                            info.sequence,
+                            info.schema,
+                            info.reserved,
+                            info.value_count,
+                            info.value_size
+                        ),
+                        (11, 22, 33, 44, 55)
+                    );
+                }
+                status => panic!("unexpected telemetry read status: {status:?}"),
+            }
+        }
+        assert!(successes > 0);
+        assert_eq!(writer.join().unwrap(), Ok(()));
     }
 
     #[test]

@@ -132,7 +132,13 @@ typedef struct CaliberApiV1 {
     CaliberStatus (*context_release_resource)(const CaliberContext *, uint64_t, uint64_t);
     /* Replaces the whole fixed-width latest sample; does not retain history. */
     CaliberStatus (*context_publish_telemetry)(const CaliberContext *, const size_t *, size_t);
-    /* Copies telemetry into caller storage; info is caller-owned metadata. */
+    /*
+     * Capacity is measured in size_t words and may exceed telemetry_width;
+     * successful reads leave the suffix untouched. On failure the sample
+     * buffer is unchanged. BUFFER_TOO_SMALL reports the required value_count
+     * in info when a sample exists; other failures leave info unchanged.
+     * Reads may allocate scratch storage and are not hard realtime safe.
+     */
     CaliberStatus (*context_read_latest_telemetry)(const CaliberContext *, size_t *, size_t, CaliberTelemetryInfo *);
     CaliberStatus (*context_wake_sequence)(const CaliberContext *, uint64_t *);
     /* Blocks until the sequence changes or waiters are permanently stopped. */

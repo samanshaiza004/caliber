@@ -15,13 +15,12 @@
 //!
 //! [`ControlQueue`] and [`StatePublisher`] are multi-thread-safe and use
 //! locking or reference counting appropriate for ordinary application/UI
-//! traffic. [`LatestTelemetry`] and [`SpscStream`] are intentionally narrower:
-//! they are non-blocking, preallocated mechanisms for one producer and one
-//! consumer. They may be suitable for a realtime-adjacent bridge, but this
-//! crate is not an audio engine and does not claim that every operation is
-//! suitable for a hard realtime callback. In particular, resource and state
-//! publication allocate during publication and must not be called from such a
-//! callback.
+//! traffic. [`LatestTelemetry`] publication and [`SpscStream`] operations use
+//! preallocated storage and do not block. Telemetry reads can allocate scratch
+//! space and have bounded retries. This crate is not an audio engine and does
+//! not claim that every operation is suitable for a hard realtime callback.
+//! In particular, resource and state publication allocate during publication
+//! and must not be called from such a callback.
 //!
 //! A dropped notification is observable: control sends return a bounded queue
 //! error, telemetry retains only its newest value, and stream pushes return
@@ -31,7 +30,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::fmt;
 use std::mem::MaybeUninit;
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering, fence};
 use std::sync::{Arc, Condvar, Mutex, RwLock};
 use std::time::Duration;
 
@@ -92,7 +91,7 @@ pub enum Error {
     InvalidSchemaVersion,
     /// No telemetry sample has been published yet.
     NoTelemetry,
-    /// Another telemetry writer is currently publishing.
+    /// A telemetry writer is active, or a reader could not capture a stable sample.
     TelemetryBusy,
     /// A revision would wrap and cannot remain monotonic.
     RevisionExhausted,
@@ -637,7 +636,7 @@ impl ResourceRegistry {
 
 /// A fixed-width latest-value telemetry slot.
 ///
-/// The slot uses a sequence lock over atomic bytes. A successful publish does
+/// The slot uses a sequence lock over atomic words. A successful publish does
 /// not allocate, block, or retain history. The intended contract is one
 /// producer and any number of readers. An accidental concurrent producer gets
 /// [`Error::TelemetryBusy`] rather than racing the active write.
@@ -697,7 +696,7 @@ impl LatestTelemetry {
         if current >= u64::MAX - 1 {
             return Err(Error::RevisionExhausted);
         }
-        if !current.is_multiple_of(2)
+        if current & 1 != 0
             || self
                 .sequence
                 .compare_exchange(current, current + 1, Ordering::Acquire, Ordering::Relaxed)
@@ -705,6 +704,11 @@ impl LatestTelemetry {
         {
             return Err(Error::TelemetryBusy);
         }
+        // If a reader observes any word from this write, its acquire fence
+        // synchronizes with this release fence. The odd sequence then happens
+        // before the reader's final sequence load, which cannot validate an
+        // earlier even sequence.
+        fence(Ordering::Release);
         for (slot, value) in self.bytes.iter().zip(values) {
             slot.store(*value, Ordering::Relaxed);
         }
@@ -713,7 +717,28 @@ impl LatestTelemetry {
     }
 
     /// Copies one coherent sample into a caller-owned fixed-size buffer.
+    ///
+    /// On every error, including [`Error::TelemetryBusy`] and allocation
+    /// failure, `output` is unchanged. A read may allocate temporary storage
+    /// for `width` words and is not suitable for a hard realtime callback.
+    /// Publication remains allocation-free after setup.
     pub fn read_into(&self, output: &mut [usize]) -> Result<Revision, Error> {
+        #[cfg(not(test))]
+        {
+            self.read_into_impl(output)
+        }
+        #[cfg(test)]
+        {
+            self.read_into_impl(output, |_| {})
+        }
+    }
+
+    // The callback exists only in tests, to force a write between word loads.
+    fn read_into_impl(
+        &self,
+        output: &mut [usize],
+        #[cfg(test)] mut after_word: impl FnMut(usize),
+    ) -> Result<Revision, Error> {
         if output.len() != self.width {
             return Err(Error::WrongSize {
                 kind: "telemetry output",
@@ -721,20 +746,36 @@ impl LatestTelemetry {
                 expected: self.width,
             });
         }
+        let mut candidate = Vec::new();
         for _ in 0..32 {
             let before = self.sequence.load(Ordering::Acquire);
             if before == 0 {
                 return Err(Error::NoTelemetry);
             }
-            if !before.is_multiple_of(2) {
+            if before & 1 != 0 {
                 std::hint::spin_loop();
                 continue;
             }
-            for (output, slot) in output.iter_mut().zip(&self.bytes) {
-                *output = slot.load(Ordering::Relaxed);
+            if candidate.is_empty() {
+                candidate
+                    .try_reserve_exact(self.width)
+                    .map_err(|_| Error::AllocationFailed {
+                        kind: "telemetry read scratch",
+                    })?;
+                candidate.resize(self.width, 0);
             }
+            for (_index, (word, slot)) in candidate.iter_mut().zip(&self.bytes).enumerate() {
+                *word = slot.load(Ordering::Relaxed);
+                #[cfg(test)]
+                after_word(_index);
+            }
+            // The initial acquire sees the words of the completed revision.
+            // If a word instead came from a later write, this fence pairs
+            // with that writer's release fence before the final sequence load.
+            fence(Ordering::Acquire);
             let after = self.sequence.load(Ordering::Acquire);
             if before == after {
+                output.copy_from_slice(&candidate);
                 return Ok(before / 2);
             }
             std::hint::spin_loop();
@@ -1089,22 +1130,109 @@ mod tests {
         let finished = Arc::new(AtomicBool::new(false));
         let writer_finished = Arc::clone(&finished);
         let thread = thread::spawn(move || {
-            for value in 1..=10_000_usize {
+            for value in 1..=100_000_usize {
                 writer.publish(&[value, !value]).unwrap();
             }
             writer_finished.store(true, Ordering::Release);
         });
         let mut output = [0; 2];
         while !finished.load(Ordering::Acquire) {
-            if telemetry.read_into(&mut output).is_ok() {
-                assert_eq!(output[1], !output[0]);
+            let previous = output;
+            match telemetry.read_into(&mut output) {
+                Ok(revision) => {
+                    assert_eq!(output[1], !output[0]);
+                    assert_eq!(revision, output[0] as Revision);
+                }
+                Err(Error::TelemetryBusy | Error::NoTelemetry) => assert_eq!(output, previous),
+                Err(error) => panic!("unexpected telemetry read error: {error}"),
             }
             thread::yield_now();
         }
         thread.join().unwrap();
-        telemetry.read_into(&mut output).unwrap();
-        assert_eq!(output[1], !output[0]);
-        assert_eq!(telemetry.sequence(), 10_000);
+        assert_eq!(telemetry.read_into(&mut output), Ok(100_000));
+        assert_eq!(output, [100_000, !100_000]);
+        assert_eq!(telemetry.sequence(), 100_000);
+    }
+
+    #[test]
+    fn telemetry_retry_exhaustion_preserves_output_during_concurrent_writes() {
+        let telemetry = Arc::new(LatestTelemetry::new(2).unwrap());
+        telemetry.publish(&[1, !1]).unwrap();
+
+        let writer = Arc::clone(&telemetry);
+        let (start_write, write_requested) = std::sync::mpsc::sync_channel(0);
+        let (write_done, wait_for_write) = std::sync::mpsc::sync_channel(0);
+        let thread = thread::spawn(move || {
+            let mut completed = 0;
+            for value in 2..=33_usize {
+                if write_requested.recv().is_err() {
+                    break;
+                }
+                writer.publish(&[value, !value]).unwrap();
+                write_done.send(()).unwrap();
+                completed += 1;
+            }
+            completed
+        });
+
+        let mut output = [1234, 5678];
+        let mut writes = 0;
+        let result = telemetry.read_into_impl(&mut output, |index| {
+            if index == 0 {
+                start_write.send(()).unwrap();
+                wait_for_write.recv().unwrap();
+                writes += 1;
+            }
+        });
+        drop(start_write);
+        assert_eq!(thread.join().unwrap(), 32);
+        assert_eq!(writes, 32);
+        assert_eq!(result, Err(Error::TelemetryBusy));
+        assert_eq!(output, [1234, 5678]);
+
+        assert_eq!(telemetry.read_into(&mut output), Ok(33));
+        assert_eq!(output, [33, !33]);
+    }
+
+    #[test]
+    fn telemetry_retries_torn_sample_then_returns_coherent_revision() {
+        let telemetry = LatestTelemetry::new(2).unwrap();
+        telemetry.publish(&[1, !1]).unwrap();
+        let mut output = [1234, 5678];
+        let mut attempts = 0;
+
+        let result = telemetry.read_into_impl(&mut output, |index| {
+            if index == 0 {
+                attempts += 1;
+                if attempts == 1 {
+                    telemetry.publish(&[2, !2]).unwrap();
+                }
+            }
+        });
+
+        assert_eq!(attempts, 2);
+        assert_eq!(result, Ok(2));
+        assert_eq!(output, [2, !2]);
+    }
+
+    #[test]
+    fn telemetry_errors_leave_output_unchanged() {
+        let telemetry = LatestTelemetry::new(2).unwrap();
+        let mut output = [1234, 5678];
+        assert_eq!(telemetry.read_into(&mut output), Err(Error::NoTelemetry));
+        assert_eq!(output, [1234, 5678]);
+
+        telemetry.publish(&[1, 2]).unwrap();
+        let mut short = [1234];
+        assert_eq!(
+            telemetry.read_into(&mut short),
+            Err(Error::WrongSize {
+                kind: "telemetry output",
+                actual: 1,
+                expected: 2,
+            })
+        );
+        assert_eq!(short, [1234]);
     }
 
     #[test]
