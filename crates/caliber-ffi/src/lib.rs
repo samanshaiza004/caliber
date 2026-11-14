@@ -275,7 +275,6 @@ pub struct CaliberContext {
 struct ContextInner {
     limits: Limits,
     control: ControlQueue,
-    command_peek: Mutex<Option<Vec<u8>>>,
     state: StatePublisher,
     resources: ResourceRegistry,
     resource_slots: Mutex<ResourceSlots>,
@@ -367,7 +366,6 @@ impl CaliberContext {
                 limits,
                 control: ControlQueue::new(limits.pending_commands, limits.command_bytes)
                     .map_err(map_core_error)?,
-                command_peek: Mutex::new(None),
                 state: StatePublisher::new(limits.publication_bytes).map_err(map_core_error)?,
                 resources: ResourceRegistry::new(limits.max_resources, limits.resource_bytes)
                     .map_err(map_core_error)?,
@@ -394,35 +392,10 @@ impl CaliberContext {
     }
 
     fn peek_command_size(&self) -> Result<usize, CaliberStatus> {
-        let mut peek = self
-            .inner
-            .command_peek
-            .lock()
-            .map_err(|_| CaliberStatus::Internal)?;
-        if peek.is_none() {
-            *peek = self.inner.control.try_pop();
-        }
-        peek.as_ref()
-            .map(Vec::len)
+        self.inner
+            .control
+            .peek_len()
             .ok_or(CaliberStatus::Unavailable)
-    }
-
-    fn take_command(&self, out: &mut [u8]) -> Result<usize, CaliberStatus> {
-        let mut peek = self
-            .inner
-            .command_peek
-            .lock()
-            .map_err(|_| CaliberStatus::Internal)?;
-        if peek.is_none() {
-            *peek = self.inner.control.try_pop();
-        }
-        let command = peek.as_ref().ok_or(CaliberStatus::Unavailable)?;
-        if out.len() < command.len() {
-            return Err(CaliberStatus::BufferTooSmall);
-        }
-        let command = peek.take().expect("peeked command remains present");
-        out[..command.len()].copy_from_slice(&command);
-        Ok(command.len())
     }
 
     fn read_state(&self) -> Result<CaliberStatePublication, CaliberStatus> {
@@ -899,8 +872,9 @@ pub unsafe extern "C" fn caliber_context_dispatch(
 }
 
 /// Return the byte length of the oldest queued command without removing it.
-/// `out_len` is caller-owned and required.  The command remains queued until
-/// `caliber_context_take_command` succeeds.
+/// `out_len` is caller-owned and required. The command remains queued until a
+/// `caliber_context_take_command` succeeds; another consumer can take it
+/// before a subsequent call.
 ///
 /// # Safety
 /// `context` must be a live handle and `out_len` must point to writable
@@ -931,7 +905,7 @@ pub unsafe extern "C" fn caliber_context_peek_command(
 
 /// Copy and remove the oldest queued command.  A short destination leaves the
 /// command queued and returns `BufferTooSmall`; `out_len` reports the required
-/// capacity on that path.
+/// capacity for the head observed by that call.
 ///
 /// # Safety
 /// `context` must be a live handle, `out_len` must point to writable storage,
@@ -956,24 +930,14 @@ pub unsafe extern "C" fn caliber_context_take_command(
             Ok(out) => out,
             Err(status) => return status,
         };
-        let required = match context.peek_command_size() {
-            Ok(required) => required,
-            Err(status) => return status,
+        let (status, len) = match context.inner.control.try_pop_into(out) {
+            Ok(Some(len)) => (CaliberStatus::Ok, len),
+            Ok(None) => return CaliberStatus::Unavailable,
+            Err(required) => (CaliberStatus::BufferTooSmall, required),
         };
         // SAFETY: out_len was checked non-null and is caller-owned output.
-        unsafe { *out_len = required };
-        if capacity < required {
-            return CaliberStatus::BufferTooSmall;
-        }
-        match context.take_command(out) {
-            Ok(actual) => {
-                // Keep the reported size authoritative even if a future core
-                // implementation changes its queue internals.
-                unsafe { *out_len = actual };
-                CaliberStatus::Ok
-            }
-            Err(status) => status,
-        }
+        unsafe { *out_len = len };
+        status
     }))
     .unwrap_or(CaliberStatus::Internal)
 }

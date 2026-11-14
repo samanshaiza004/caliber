@@ -224,6 +224,40 @@ impl ControlQueue {
         queue.pop_front()
     }
 
+    /// Returns the oldest payload's length without removing it.
+    ///
+    /// This is a snapshot: another consumer may remove the payload before a
+    /// subsequent operation.
+    pub fn peek_len(&self) -> Option<usize> {
+        self.inner
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .front()
+            .map(Vec::len)
+    }
+
+    /// Copies and removes the oldest payload under one queue lock.
+    ///
+    /// Returns `Ok(None)` when empty or `Ok(Some(bytes_written))` on success.
+    /// If `out` is too short, returns `Err(required_bytes)` and leaves the
+    /// payload in the queue, still counted against its capacity.
+    pub fn try_pop_into(&self, out: &mut [u8]) -> Result<Option<usize>, usize> {
+        let mut queue = self
+            .inner
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        let Some(payload) = queue.front() else {
+            return Ok(None);
+        };
+        let len = payload.len();
+        if out.len() < len {
+            return Err(len);
+        }
+        out[..len].copy_from_slice(payload);
+        queue.pop_front();
+        Ok(Some(len))
+    }
+
     /// Waits for and removes the oldest payload.
     pub fn wait_pop(&self) -> Vec<u8> {
         loop {

@@ -9,6 +9,7 @@ fn main() {
         .file(manifest_dir.join("tests/abi/layout_probe.c"))
         .file(manifest_dir.join("tests/abi/old_client.c"))
         .file(manifest_dir.join("tests/abi/current_client.c"))
+        .file(manifest_dir.join("tests/abi/command_queue.c"))
         .include(caliber_root.join("include"))
         .include(manifest_dir.join("tests/fixtures/v1-prefix"))
         .warnings(true)

@@ -71,6 +71,11 @@ see [`LIFECYCLE.md`](LIFECYCLE.md).
   stopped. Destruction must not race another call.
 - `context_dispatch` copies command bytes before returning. Its input can be
   released after the call.
+- Commands remain in the bounded FIFO, and count against
+  `max_pending_commands`, until a take succeeds. Peek reports the current
+  head's size without reserving it; another consumer may take that command
+  before a later call. A take that returns `BUFFER_TOO_SMALL` reports the
+  required size for the head it observed and does not remove that command.
 - A successful state read returns an immutable lease. Keep its data pointer
   valid only while that lease is held, then call
   `state_publication_release` exactly once. The lease can outlive the context.
