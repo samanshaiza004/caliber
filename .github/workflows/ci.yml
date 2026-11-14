@@ -34,6 +34,8 @@ jobs:
   rust:
     name: rust quality (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    env:
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target/ci-${{ github.run_id }}-${{ github.run_attempt }}
     strategy:
       fail-fast: false
       matrix:
@@ -43,12 +45,53 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+      - name: Test workspace with a fresh target directory
+        shell: bash
+        run: |
+          test ! -e "$CARGO_TARGET_DIR"
+          cargo test --workspace --locked
+      - name: Check ABI library selection and override
+        shell: bash
+        run: |
+          case "$RUNNER_OS" in
+            Windows) library=caliber_ffi.dll ;;
+            macOS) library=libcaliber_ffi.dylib ;;
+            *) library=libcaliber_ffi.so ;;
+          esac
+
+          # A stale profile-level artifact must not mask the test dependency.
+          printf 'stale profile library\n' > "$CARGO_TARGET_DIR/debug/$library"
+          cargo test --locked -p caliber-abi-tests --test abi_compat
+          rm "$CARGO_TARGET_DIR/debug/$library"
+
+          # Verify that a valid override loads, and a missing one fails instead
+          # of falling back to the dependency cdylib.
+          cp "$CARGO_TARGET_DIR/debug/deps/$library" "$CARGO_TARGET_DIR/override-$library"
+          CALIBER_FFI_PATH="$CARGO_TARGET_DIR/override-$library" \
+            cargo test --locked -p caliber-abi-tests --test abi_compat v1_client_loads_current_library
+          missing="$CARGO_TARGET_DIR/missing-$library"
+          for client in current_v1_client_loads_current_library frozen_old_v1_client_loads_current_library; do
+            if CALIBER_FFI_PATH="$missing" cargo test --locked -p caliber-abi-tests \
+                --test abi_compat "$client" -- --exact > "$CARGO_TARGET_DIR/override-check.log" 2>&1; then
+              echo "$client unexpectedly accepted a missing CALIBER_FFI_PATH"
+              exit 1
+            fi
+            if ! grep -F "Caliber cdylib missing at $missing" "$CARGO_TARGET_DIR/override-check.log"; then
+              cat "$CARGO_TARGET_DIR/override-check.log"
+              exit 1
+            fi
+          done
+      - name: Test ABI clients with a custom profile and explicit target
+        shell: bash
+        run: |
+          host_target=$(rustc -vV | sed -n 's/^host: //p' | tr -d '\r')
+          cargo --config 'profile.abi-ci.inherits="dev"' test --locked \
+            -p caliber-abi-tests --test abi_compat --profile abi-ci --target "$host_target"
       - run: cargo fmt --all -- --check
       - run: cargo fmt --manifest-path experiments/synthetic-rust/Cargo.toml --all -- --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo clippy --manifest-path experiments/synthetic-rust/Cargo.toml --all-targets -- -D warnings
       - run: cargo build --workspace
-      - run: cargo test --workspace
       - run: cargo test --manifest-path experiments/synthetic-rust/Cargo.toml
       - run: cargo build --manifest-path experiments/synthetic-rust/Cargo.toml
 

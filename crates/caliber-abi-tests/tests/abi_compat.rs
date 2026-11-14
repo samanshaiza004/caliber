@@ -107,16 +107,18 @@ fn run_client(client: unsafe extern "C" fn(*const c_char) -> c_int, label: &str)
     let path = caliber_library_path();
     assert!(
         path.is_file(),
-        "Caliber cdylib missing at {}; run cargo build -p caliber-ffi before ABI compatibility tests",
+        "Caliber cdylib missing at {}; cargo test should build it beside the test executable unless CALIBER_FFI_PATH overrides it",
         path.display()
     );
-    let path = CString::new(path.to_string_lossy().as_bytes()).expect("library path has no NUL");
+    let c_path = CString::new(path.to_string_lossy().as_bytes()).expect("library path has no NUL");
     // SAFETY: each C fixture dynamically loads the cdylib, uses only its frozen
     // or current C declaration, then unloads it before returning.
-    let result = unsafe { client(path.as_ptr()) };
+    let result = unsafe { client(c_path.as_ptr()) };
     assert_eq!(
-        result, 0,
-        "{label} client failed at compatibility check {result}"
+        result,
+        0,
+        "{label} client failed for {} at compatibility check {result}",
+        path.display()
     );
 }
 
@@ -124,15 +126,13 @@ fn caliber_library_path() -> PathBuf {
     if let Some(path) = std::env::var_os("CALIBER_FFI_PATH") {
         return PathBuf::from(path);
     }
-    let mut path = std::env::current_exe().expect("test executable path");
-    path.pop(); // deps
-    path.pop(); // target profile directory
-    path.push(if cfg!(target_os = "windows") {
-        "caliber_ffi.dll"
-    } else if cfg!(target_os = "macos") {
-        "libcaliber_ffi.dylib"
-    } else {
-        "libcaliber_ffi.so"
-    });
-    path
+    // Cargo builds the dependency cdylib beside this integration test, even
+    // when the target directory, target triple, or profile is customized.
+    let executable = std::env::current_exe().expect("test executable path");
+    let deps_dir = executable.parent().expect("test executable directory");
+    deps_dir.join(format!(
+        "{}caliber_ffi{}",
+        std::env::consts::DLL_PREFIX,
+        std::env::consts::DLL_SUFFIX
+    ))
 }
