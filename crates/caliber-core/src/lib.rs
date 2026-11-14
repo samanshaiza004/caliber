@@ -326,7 +326,6 @@ impl StatePublication {
 /// allocate; it is not a realtime operation.
 pub struct StatePublisher {
     current: RwLock<Option<Arc<StatePublication>>>,
-    next_revision: AtomicU64,
     published_revision: AtomicU64,
     max_state_bytes: usize,
 }
@@ -350,7 +349,6 @@ impl StatePublisher {
         }
         Ok(Self {
             current: RwLock::new(None),
-            next_revision: AtomicU64::new(1),
             published_revision: AtomicU64::new(0),
             max_state_bytes,
         })
@@ -384,12 +382,16 @@ impl StatePublisher {
             .current
             .write()
             .unwrap_or_else(|poison| poison.into_inner());
+        // The write lock serializes publishers, so the visible revision is
+        // also the next revision's predecessor. Avoid a second atomic counter:
+        // its fetch_update API is deprecated by newer Rust releases, while a
+        // checked increment here fails before replacing the current snapshot
+        // if the revision space is exhausted.
         let revision = self
-            .next_revision
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
-                current.checked_add(1)
-            })
-            .map_err(|_| Error::RevisionExhausted)?;
+            .published_revision
+            .load(Ordering::Relaxed)
+            .checked_add(1)
+            .ok_or(Error::RevisionExhausted)?;
         let publication = Arc::new(StatePublication {
             revision,
             schema,
@@ -1253,6 +1255,26 @@ mod tests {
         let state = publisher.read().unwrap();
         assert_eq!(state.schema(), 1);
         assert_eq!(state.payload(), b"ok");
+    }
+
+    #[test]
+    fn exhausted_state_revision_preserves_last_publication() {
+        let publisher = StatePublisher::new(64).unwrap();
+        assert_eq!(publisher.publish(1, b"first"), Ok(1));
+        let previous = publisher.read().unwrap();
+
+        // Simulate a publisher that has consumed the full revision space.
+        publisher
+            .published_revision
+            .store(u64::MAX, Ordering::Release);
+
+        assert_eq!(
+            publisher.publish(1, b"replacement"),
+            Err(Error::RevisionExhausted)
+        );
+        let current = publisher.read().unwrap();
+        assert_eq!(current.revision(), previous.revision());
+        assert_eq!(current.payload(), previous.payload());
     }
 
     #[test]
