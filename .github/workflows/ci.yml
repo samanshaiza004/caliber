@@ -60,7 +60,14 @@ jobs:
         shell: bash
         run: |
           test ! -e "$CARGO_TARGET_DIR"
+          case "$RUNNER_OS" in
+            Windows) library=caliber_ffi.dll ;;
+            macOS) library=libcaliber_ffi.dylib ;;
+            *) library=libcaliber_ffi.so ;;
+          esac
           cargo build -p caliber-ffi --locked
+          mkdir -p "$CARGO_TARGET_DIR/debug/deps"
+          cp "$CARGO_TARGET_DIR/debug/$library" "$CARGO_TARGET_DIR/debug/deps/$library"
           cargo test --workspace --locked
       - name: Check ABI library selection and override
         shell: bash
@@ -97,8 +104,16 @@ jobs:
         shell: bash
         run: |
           host_target=$(rustc -vV | sed -n 's/^host: //p' | tr -d '\r')
+          case "$RUNNER_OS" in
+            Windows) library=caliber_ffi.dll ;;
+            macOS) library=libcaliber_ffi.dylib ;;
+            *) library=libcaliber_ffi.so ;;
+          esac
           cargo --config 'profile.abi-ci.inherits="dev"' build --locked \
             -p caliber-ffi --profile abi-ci --target "$host_target"
+          mkdir -p "$CARGO_TARGET_DIR/$host_target/abi-ci/deps"
+          cp "$CARGO_TARGET_DIR/$host_target/abi-ci/$library" \
+            "$CARGO_TARGET_DIR/$host_target/abi-ci/deps/$library"
           cargo --config 'profile.abi-ci.inherits="dev"' test --locked \
             -p caliber-abi-tests --test abi_compat --profile abi-ci --target "$host_target"
       - run: cargo fmt --all -- --check

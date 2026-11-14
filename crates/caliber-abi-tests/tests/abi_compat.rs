@@ -133,14 +133,6 @@ fn caliber_library_path() -> PathBuf {
 fn caliber_library_path_from_executable(executable: &Path) -> PathBuf {
     let library_stem = format!("{}caliber_ffi", std::env::consts::DLL_PREFIX);
     let filename = format!("{library_stem}{}", std::env::consts::DLL_SUFFIX);
-    let adjacent = executable
-        .parent()
-        .expect("test executable directory")
-        .join(&filename);
-    if adjacent.is_file() {
-        return adjacent;
-    }
-
     // Cargo 1.100 may run test binaries from a build-script OUT_DIR and emit
     // hashed cdylib names in deps. Search only deps directories so an unrelated
     // library beside the profile directory cannot shadow the built dependency.
@@ -172,7 +164,18 @@ fn caliber_library_path_from_executable(executable: &Path) -> PathBuf {
         }
     }
 
-    adjacent
+    // Some Cargo versions emit the cdylib only at the profile root. Keep this
+    // as a fallback after all dependency directories have been checked.
+    executable
+        .ancestors()
+        .map(|ancestor| ancestor.join(&filename))
+        .find(|candidate| candidate.is_file())
+        .unwrap_or_else(|| {
+            executable
+                .parent()
+                .expect("test executable directory")
+                .join(filename)
+        })
 }
 
 #[cfg(test)]
@@ -188,10 +191,15 @@ mod tests {
 
         let executable = root.join("debug/build/caliber-abi-tests/hash/out/abi_compat");
         let deps = root.join("debug/deps");
+        let library_stem = format!("{}caliber_ffi", std::env::consts::DLL_PREFIX);
+        let profile_library = root.join(format!(
+            "debug/{library_stem}{}",
+            std::env::consts::DLL_SUFFIX
+        ));
         fs::create_dir_all(executable.parent().unwrap()).unwrap();
         fs::create_dir_all(&deps).unwrap();
+        fs::write(&profile_library, b"profile library").unwrap();
 
-        let library_stem = format!("{}caliber_ffi", std::env::consts::DLL_PREFIX);
         let library = deps.join(format!(
             "{library_stem}-cargo-hash{}",
             std::env::consts::DLL_SUFFIX
@@ -203,6 +211,13 @@ mod tests {
         let exact = deps.join(format!("{library_stem}{}", std::env::consts::DLL_SUFFIX));
         fs::write(&exact, b"exact dependency library").unwrap();
         assert_eq!(caliber_library_path_from_executable(&executable), exact);
+
+        fs::remove_file(exact).unwrap();
+        fs::remove_file(library).unwrap();
+        assert_eq!(
+            caliber_library_path_from_executable(&executable),
+            profile_library
+        );
 
         fs::remove_dir_all(root).unwrap();
     }
