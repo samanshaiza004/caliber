@@ -131,11 +131,8 @@ fn caliber_library_path() -> PathBuf {
 }
 
 fn caliber_library_path_from_executable(executable: &Path) -> PathBuf {
-    let filename = format!(
-        "{}caliber_ffi{}",
-        std::env::consts::DLL_PREFIX,
-        std::env::consts::DLL_SUFFIX
-    );
+    let library_stem = format!("{}caliber_ffi", std::env::consts::DLL_PREFIX);
+    let filename = format!("{library_stem}{}", std::env::consts::DLL_SUFFIX);
     let adjacent = executable
         .parent()
         .expect("test executable directory")
@@ -144,13 +141,38 @@ fn caliber_library_path_from_executable(executable: &Path) -> PathBuf {
         return adjacent;
     }
 
-    // Cargo 1.100 may run test binaries from a build-script OUT_DIR. Search
-    // their ancestors for the profile's deps directory, where the cdylib lives.
-    executable
-        .ancestors()
-        .map(|ancestor| ancestor.join("deps").join(&filename))
-        .find(|candidate| candidate.is_file())
-        .unwrap_or(adjacent)
+    // Cargo 1.100 may run test binaries from a build-script OUT_DIR and emit
+    // hashed cdylib names in deps. Search only deps directories so an unrelated
+    // library beside the profile directory cannot shadow the built dependency.
+    for ancestor in executable.ancestors() {
+        let deps = ancestor.join("deps");
+        let exact = deps.join(&filename);
+        if exact.is_file() {
+            return exact;
+        }
+
+        let mut hashed: Vec<_> = match std::fs::read_dir(&deps) {
+            Ok(entries) => entries
+                .filter_map(Result::ok)
+                .map(|entry| entry.path())
+                .filter(|path| {
+                    path.file_name()
+                        .and_then(|name| name.to_str())
+                        .is_some_and(|name| {
+                            name.starts_with(&library_stem)
+                                && name.ends_with(std::env::consts::DLL_SUFFIX)
+                        })
+                })
+                .collect(),
+            Err(_) => continue,
+        };
+        hashed.sort();
+        if let Some(candidate) = hashed.into_iter().next() {
+            return candidate;
+        }
+    }
+
+    adjacent
 }
 
 #[cfg(test)]
@@ -169,14 +191,18 @@ mod tests {
         fs::create_dir_all(executable.parent().unwrap()).unwrap();
         fs::create_dir_all(&deps).unwrap();
 
+        let library_stem = format!("{}caliber_ffi", std::env::consts::DLL_PREFIX);
         let library = deps.join(format!(
-            "{}caliber_ffi{}",
-            std::env::consts::DLL_PREFIX,
+            "{library_stem}-cargo-hash{}",
             std::env::consts::DLL_SUFFIX
         ));
         fs::write(&library, b"test library marker").unwrap();
 
         assert_eq!(caliber_library_path_from_executable(&executable), library);
+
+        let exact = deps.join(format!("{library_stem}{}", std::env::consts::DLL_SUFFIX));
+        fs::write(&exact, b"exact dependency library").unwrap();
+        assert_eq!(caliber_library_path_from_executable(&executable), exact);
 
         fs::remove_dir_all(root).unwrap();
     }
