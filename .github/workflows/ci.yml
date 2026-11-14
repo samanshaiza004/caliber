@@ -60,6 +60,7 @@ jobs:
         shell: bash
         run: |
           test ! -e "$CARGO_TARGET_DIR"
+          cargo build -p caliber-ffi --locked
           cargo test --workspace --locked
       - name: Check ABI library selection and override
         shell: bash
@@ -96,6 +97,8 @@ jobs:
         shell: bash
         run: |
           host_target=$(rustc -vV | sed -n 's/^host: //p' | tr -d '\r')
+          cargo --config 'profile.abi-ci.inherits="dev"' build --locked \
+            -p caliber-ffi --profile abi-ci --target "$host_target"
           cargo --config 'profile.abi-ci.inherits="dev"' test --locked \
             -p caliber-abi-tests --test abi_compat --profile abi-ci --target "$host_target"
       - run: cargo fmt --all -- --check

@@ -105,14 +105,16 @@ From a clean Caliber checkout, run:
 
 ```sh
 cargo fmt --all -- --check
-cargo test --workspace
+cargo build -p caliber-ffi --locked
+cargo test --workspace --locked
 cargo clippy --workspace --all-targets -- -D warnings
 cargo build --workspace
 ```
 
 The ABI compatibility tests dynamically load the `caliber_ffi` library built by
-`cargo test`, including from a fresh target directory. Set `CALIBER_FFI_PATH`
-to explicitly test a different library; the tests fail if that path is missing.
+`cargo build -p caliber-ffi`. Build it before running the workspace tests,
+including when using a fresh target directory. Set `CALIBER_FFI_PATH` to
+explicitly test a different library; the tests fail if that path is missing.
 They compare all public record/table offsets and sizes between C and Rust,
 check status values, then exercise the frozen old client and the current client
 against the library. CI runs these checks on Windows, macOS, and Linux.

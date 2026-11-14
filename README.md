@@ -96,7 +96,8 @@ schema.
 
 ```text
 cargo fmt --all -- --check
-cargo test --workspace
+cargo build -p caliber-ffi --locked
+cargo test --workspace --locked
 cargo clippy --workspace --all-targets -- -D warnings
 cargo run -p caliber -- --help
 cargo test --manifest-path experiments/synthetic-rust/Cargo.toml
